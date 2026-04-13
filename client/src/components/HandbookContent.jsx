@@ -1,0 +1,253 @@
+import React from 'react';
+
+export function HandbookContent() {
+  return (
+    <div className="handbook-content">
+      <h1>WORKFORCE HANDBOOK & POLICIES</h1>
+      <h2>LANForge, LLC. & Ascendance, LLC.</h2>
+
+      <h2>1. Overview</h2>
+      <p>
+        This Workforce Handbook applies to all individuals working with or on behalf of
+        <strong>LANForge, LLC.</strong> and <strong>Ascendance, LLC.</strong> (collectively, the “Companies”).
+      </p>
+      <p>
+        <strong>Ownership Structure:</strong><br />
+        <strong>LANForge, LLC.</strong> is the majority owner of <strong>Ascendance, LLC.</strong>, and certain personnel,
+        systems, and operations may be shared across both entities.
+      </p>
+      <p>This document outlines:</p>
+      <ul>
+        <li>Workforce classifications</li>
+        <li>Legal compliance standards</li>
+        <li>Conduct expectations</li>
+        <li>Technology and security requirements</li>
+      </ul>
+      <p>
+        This version is intended for public reference. Binding obligations may be further defined in
+        individual agreements.
+      </p>
+
+      <h2>2. Workforce Classification</h2>
+
+      <h3>2.1 Employees (W-2 / Canadian Equivalent)</h3>
+      <p>Employees:</p>
+      <ul>
+        <li>Are subject to payroll tax withholding</li>
+        <li>Work under Company direction</li>
+        <li>May be eligible for benefits depending on jurisdiction</li>
+      </ul>
+
+      <h3>2.2 Independent Contractors (1099 / Canadian Contractors)</h3>
+      <p>Contractors:</p>
+      <ul>
+        <li>Operate independently</li>
+        <li>Control how work is performed</li>
+        <li>Are responsible for their own taxes, insurance, and compliance</li>
+      </ul>
+      <p>Nothing in this handbook modifies contractor status.</p>
+
+      <h2>3. At-Will Employment (United States Only)</h2>
+      <p>For U.S.-based employees:</p>
+      <ul>
+        <li>Employment is at-will unless otherwise specified in a written agreement</li>
+        <li>Either party may terminate the relationship at any time, with or without cause, subject to applicable law</li>
+      </ul>
+
+      <h2>4. Multi-Jurisdiction Compliance (U.S. & Canada)</h2>
+      <p>
+        The Companies operate across multiple jurisdictions and comply with all applicable laws,
+        including but not limited to:
+      </p>
+
+      <h3>United States (All 50 States)</h3>
+      <p>Policies are interpreted in accordance with:</p>
+      <ul>
+        <li>Federal law, including wage and hour, anti-discrimination, and workplace safety laws</li>
+        <li>Applicable state labor laws covering wage, leave, classification, and termination matters</li>
+      </ul>
+      <p>
+        Where state law provides greater protections than federal law, state law will govern.
+      </p>
+
+      <h3>Key State-Specific Notes</h3>
+      <ul>
+        <li>Some states, including California, Colorado, Washington, New York, and Illinois, impose enhanced employee protections</li>
+        <li>States such as Florida and Texas may be more employer-friendly but remain subject to federal protections</li>
+        <li>States such as Massachusetts and New Jersey more strictly enforce wage and worker-classification requirements</li>
+      </ul>
+
+      <h3>Canada (All Provinces & Territories)</h3>
+      <p>Compliance includes:</p>
+      <ul>
+        <li>Provincial employment standards legislation</li>
+        <li>Federal regulations where applicable</li>
+        <li>Applicable privacy laws, including PIPEDA where relevant</li>
+      </ul>
+      <p>
+        Where provincial law differs, the applicable province’s law controls.
+      </p>
+
+      <h2>5. Equal Opportunity & Anti-Discrimination</h2>
+      <p>
+        The Companies provide equal opportunity regardless of:
+      </p>
+      <ul>
+        <li>Race</li>
+        <li>Color</li>
+        <li>Religion</li>
+        <li>Sex</li>
+        <li>Gender identity</li>
+        <li>Sexual orientation</li>
+        <li>Age</li>
+        <li>Disability</li>
+        <li>National origin</li>
+        <li>Any other protected classification</li>
+      </ul>
+      <p>
+        This applies across all jurisdictions in accordance with local law.
+      </p>
+
+      <h2>6. Non-Solicitation & Non-Competition</h2>
+
+      <h3>6.1 Non-Solicitation (Applies Broadly)</h3>
+      <p>
+        To the maximum extent permitted by law, all workforce members agree that during engagement and
+        for a defined period after termination, as stated in any applicable agreement, they will not:
+      </p>
+      <ul>
+        <li>Solicit or attempt to solicit Company customers</li>
+        <li>Recruit or hire Company employees or contractors</li>
+        <li>Interfere with Company relationships</li>
+      </ul>
+
+      <h3>6.2 Non-Competition (Jurisdiction-Dependent)</h3>
+      <p>
+        Non-compete enforceability varies significantly by jurisdiction.
+      </p>
+
+      <h4>United States</h4>
+      <ul>
+        <li>Some states, such as California, prohibit most non-competes</li>
+        <li>Other states may enforce them if reasonable in scope, duration, and business necessity</li>
+      </ul>
+
+      <h4>Canada</h4>
+      <ul>
+        <li>Non-competes are generally disfavored</li>
+        <li>They may only be enforced if non-solicitation is insufficient and the restriction is clearly reasonable</li>
+      </ul>
+
+      <h3>6.3 Policy Position</h3>
+      <p>The Companies:</p>
+      <ul>
+        <li>Use non-solicitation as the primary restrictive covenant</li>
+        <li>Apply non-competes only where legally enforceable and necessary</li>
+        <li>Tailor all restrictive covenants to the applicable jurisdiction</li>
+      </ul>
+
+      <h2>7. Confidentiality</h2>
+      <p>All workforce members must protect:</p>
+      <ul>
+        <li>Customer data</li>
+        <li>Pricing, financials, and internal strategy</li>
+        <li>Software, systems, code, and operational information</li>
+      </ul>
+      <p>Confidential information must not be:</p>
+      <ul>
+        <li>Shared externally without authorization</li>
+        <li>Used for personal gain</li>
+        <li>Retained after termination except as required by law or contract</li>
+      </ul>
+
+      <h2>8. Technology & Security Policy</h2>
+
+      <h3>8.1 Acceptable Use</h3>
+      <p>Company systems must be used for authorized business purposes only.</p>
+
+      <h3>8.2 Security Requirements</h3>
+      <p>All workforce members must:</p>
+      <ul>
+        <li>Use strong passwords</li>
+        <li>Use multi-factor authentication where required</li>
+        <li>Never share credentials</li>
+        <li>Secure devices, accounts, and networks</li>
+      </ul>
+
+      <h3>8.3 Data Protection</h3>
+      <p>All data must be:</p>
+      <ul>
+        <li>Stored securely</li>
+        <li>Transmitted through secure methods where applicable</li>
+        <li>Accessed only when necessary for business purposes</li>
+      </ul>
+
+      <h3>8.4 Incident Reporting</h3>
+      <p>
+        Any suspected data breach, unauthorized access, device loss, phishing event, or security
+        vulnerability must be reported immediately.
+      </p>
+
+      <h2>9. Intellectual Property</h2>
+      <p>
+        All work created within the scope of engagement or using Company resources is the property of
+        the respective Company unless otherwise agreed in writing.
+      </p>
+
+      <h2>10. Remote Work Standards</h2>
+      <p>The Companies operate with a distributed workforce. Expectations include:</p>
+      <ul>
+        <li>Reliable internet access</li>
+        <li>A secure working environment</li>
+        <li>Availability during agreed working hours, if applicable</li>
+        <li>Protection of Company information while working remotely</li>
+      </ul>
+
+      <h2>11. Compensation & Payments</h2>
+
+      <h3>Employees</h3>
+      <ul>
+        <li>Paid through payroll systems</li>
+        <li>Subject to applicable withholding and reporting requirements</li>
+      </ul>
+
+      <h3>Contractors</h3>
+      <ul>
+        <li>Paid according to contract terms or invoice arrangements</li>
+        <li>Responsible for their own tax compliance</li>
+      </ul>
+
+      <h2>12. Termination</h2>
+
+      <h3>Employees</h3>
+      <ul>
+        <li>At-will in the United States, subject to applicable law</li>
+        <li>Notice requirements may apply in Canada or where otherwise required by law</li>
+      </ul>
+
+      <h3>Contractors</h3>
+      <ul>
+        <li>Governed by the terms of the applicable contract</li>
+      </ul>
+
+      <h2>13. Amendments</h2>
+      <p>
+        The Companies reserve the right to modify, revise, or replace these policies at any time to
+        reflect operational or legal changes.
+      </p>
+
+      <h2>14. Legal Disclaimer</h2>
+      <p>
+        This handbook is provided for informational purposes only. It does not create a contract of
+        employment, guarantee continued engagement, or replace any signed agreement. All policies are
+        subject to applicable local law and written agreements.
+      </p>
+
+      <h2>15. Contact</h2>
+      <p>
+        For questions regarding these policies, please use the contact page or resources available on
+        the employee portal.
+      </p>
+    </div>
+  );
+}

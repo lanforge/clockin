@@ -1,0 +1,40 @@
+{
+  "name": "lanforge-employee-dashboard",
+  "version": "1.0.0",
+  "description": "LANForge Employee Dashboard - Employee time tracking system with clock in/out, calendar view, and admin features",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "prod": "NODE_ENV=production node server.js",
+    "deploy": "./deploy-production.sh",
+    "test": "echo \"No tests specified\" && exit 0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.2.3",
+    "ejs": "^3.1.9",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.2.1",
+    "express-session": "^1.17.3",
+    "helmet": "^8.1.0",
+    "moment": "^2.29.4",
+    "mongoose": "^8.20.4",
+    "node-cron": "^4.2.1",
+    "resend": "^6.10.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "time-tracking",
+    "employee",
+    "dashboard",
+    "lanforge",
+    "admin"
+  ],
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,1236 @@
+require('dotenv').config();
+const express = require('express');
+const session = require('express-session');
+const path = require('path');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const moment = require('moment');
+const { createObjectCsvWriter } = require('csv-writer');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const compression = require('compression');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+
+// Security middleware - disable CSP for now to fix inline event handlers
+app.use(helmet({
+  contentSecurityPolicy: false
+}));
+
+// Compression middleware
+app.use(compression());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
+});
+app.use('/api/', limiter);
+app.use('/auth/', limiter);
+
+// MongoDB connection
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://damian:wJwxO0xQYgrLV9AH@altoev.u9lcgej.mongodb.net/lanforge-employee-dashboard?retryWrites=true&w=majority&appName=LANForgeEmployeeDashboard';
+
+mongoose.connect(MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('Connected to MongoDB Atlas');
+}).catch(err => {
+  console.error('MongoDB connection error:', err);
+});
+
+// Define Mongoose schemas
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  email: { type: String },
+  role: { type: String, default: 'employee' },
+  hourly_rate: { type: Number, default: 20.0 },
+  created_at: { type: Date, default: Date.now },
+  needs_password_reset: { type: Boolean, default: false },
+  temporary_password: { type: String }
+});
+
+const timeEntrySchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  clock_in: { type: Date, required: true },
+  clock_out: { type: Date },
+  notes: { type: String },
+  created_at: { type: Date, default: Date.now }
+});
+
+const helpInquirySchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  username: { type: String },
+  inquiry_type: { type: String, required: true },
+  submitter_name: { type: String },
+  submitter_email: { type: String },
+  subject: { type: String, required: true },
+  details: { type: String, required: true },
+  urgency: { type: String, default: 'medium' },
+  incident_date: { type: Date },
+  involved_parties: { type: String },
+  status: { type: String, default: 'new' },
+  is_anonymous: { type: Boolean, default: false },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+
+const announcementSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  content: { type: String, required: true },
+  type: { type: String, default: 'info', enum: ['info', 'warning', 'urgent', 'success'] },
+  display_type: { type: String, default: 'banner', enum: ['banner', 'popup'] },
+  start_date: { type: Date, default: Date.now },
+  end_date: { type: Date },
+  is_active: { type: Boolean, default: true },
+  created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+
+const hierarchySchema = new mongoose.Schema({
+  company: { type: String, required: true, enum: ['LANForge', 'Ascendance'] },
+  name: { type: String, required: true },
+  username: { type: String },
+  title: { type: String, required: true },
+  role: { type: String, required: true },
+  level: { type: Number, required: true, min: 1, max: 5 },
+  order: { type: Number, default: 0 },
+  color: { type: String, default: '#4f46e5' },
+  is_active: { type: Boolean, default: true },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+
+// Create models
+const User = mongoose.model('User', userSchema);
+const TimeEntry = mongoose.model('TimeEntry', timeEntrySchema);
+const HelpInquiry = mongoose.model('HelpInquiry', helpInquirySchema);
+const Announcement = mongoose.model('Announcement', announcementSchema);
+const Hierarchy = mongoose.model('Hierarchy', hierarchySchema);
+
+// Middleware
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'lanforge-employee-dashboard-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { 
+    maxAge: 24 * 60 * 60 * 1000, // 24 hours
+    secure: false, // Set to false for development, true for production with HTTPS
+    httpOnly: true,
+    sameSite: 'lax'
+  }
+}));
+
+// Set EJS as view engine
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+// Authentication middleware
+function requireAuth(req, res, next) {
+  if (!req.session.userId) {
+    return res.redirect('/login');
+  }
+  next();
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.session.userId || req.session.role !== 'admin') {
+    return res.redirect('/dashboard');
+  }
+  next();
+}
+
+// Initialize default admin user (damian)
+async function initializeAdmin() {
+  try {
+    const adminExists = await User.findOne({ username: 'damian' });
+    if (!adminExists) {
+      const adminPassword = bcrypt.hashSync('Nana1523!', 10);
+      const admin = new User({
+        username: 'damian',
+        password: adminPassword,
+        email: process.env.ADMIN_EMAIL || 'damian@lanforge.com',
+        role: 'admin',
+        hourly_rate: 0
+      });
+      await admin.save();
+      console.log('Default admin user (damian) created');
+    }
+  } catch (err) {
+    console.error('Error creating admin user:', err);
+  }
+}
+
+// Initialize hierarchy data
+async function initializeHierarchy() {
+  try {
+    const hierarchyExists = await Hierarchy.findOne();
+    if (!hierarchyExists) {
+      const hierarchyData = [
+        // LANForge Hierarchy
+        { company: 'LANForge', name: 'Damian', username: 'damian', title: 'CEO', role: 'Founder and Chief Executive Officer', level: 1, order: 1, color: '#4f46e5' },
+        { company: 'LANForge', name: 'Marina', username: 'marina', title: 'CMO', role: 'Chief Marketing Officer', level: 2, order: 1, color: '#0ea5e9' },
+        { company: 'LANForge', name: 'Soshyl', username: 'soshyl', title: 'Customer Experience', role: 'Senior Vice President of Customer Experience', level: 2, order: 2, color: '#10b981' },
+        { company: 'LANForge', name: 'Fukuro', username: 'fukuro', title: 'Project Manager', role: 'Project Manager', level: 3, order: 1, color: '#f59e0b' },
+        { company: 'LANForge', name: 'Anna', username: 'anna', title: 'Partnerships', role: 'Partnerships Manager', level: 3, order: 2, color: '#8b5cf6' },
+        { company: 'LANForge', name: 'Hailee', username: 'hailee', title: 'Social Media', role: 'Social Media Assistant', level: 3, order: 3, color: '#ec4899' },
+        
+        // Ascendance Hierarchy
+        { company: 'Ascendance', name: 'Luke', username: 'luke', title: 'CEO', role: 'Founder and Chief Executive Officer', level: 1, order: 1, color: '#4f46e5' },
+        { company: 'Ascendance', name: 'Xander', username: 'xander', title: 'President', role: 'President', level: 2, order: 1, color: '#0ea5e9' },
+        { company: 'Ascendance', name: 'Damian', username: 'damian', title: 'CEO', role: 'Co-Owner', level: 2, order: 2, color: '#4f46e5' },
+        { company: 'Ascendance', name: 'Raven', username: 'raven', title: 'COO', role: 'Chief Operating Officer', level: 2, order: 3, color: '#10b981' },
+        { company: 'Ascendance', name: 'Soshyl', username: 'soshyl', title: 'Customer Experience', role: 'Senior Vice President of Customer Experience', level: 2, order: 4, color: '#f59e0b' },
+        { company: 'Ascendance', name: 'Raven', username: 'raven', title: 'COO', role: 'Success Manager and Customer Service Manager', level: 3, order: 1, color: '#8b5cf6' },
+        { company: 'Ascendance', name: 'Santi', username: 'santi', title: 'Service Provider', role: 'Service Provider', level: 3, order: 2, color: '#ec4899' },
+        { company: 'Ascendance', name: 'Rogue', username: 'rogue', title: 'Service Provider', role: 'Service Provider', level: 3, order: 3, color: '#f59e0b' },
+        { company: 'Ascendance', name: 'Those', username: 'those', title: 'Premier CC', role: 'Premier Content Creator', level: 3, order: 4, color: '#10b981' }
+      ];
+      
+      await Hierarchy.insertMany(hierarchyData);
+      console.log('Default hierarchy data created');
+    }
+  } catch (err) {
+    console.error('Error creating hierarchy data:', err);
+  }
+}
+
+// Call initializeAdmin and initializeHierarchy after MongoDB connection is established
+mongoose.connection.once('open', () => {
+  initializeAdmin();
+  initializeHierarchy();
+});
+
+// Routes
+app.get('/', (req, res) => {
+  if (req.session.userId) {
+    res.redirect('/dashboard');
+  } else {
+    res.redirect('/login');
+  }
+});
+
+app.get('/login', (req, res) => {
+  res.render('login', { error: null });
+});
+
+app.post('/login', async (req, res) => {
+  try {
+    console.log('Login attempt for username:', req.body.username);
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+      return res.render('login', { error: 'Username and password are required' });
+    }
+    
+    // Escape special characters in username to prevent regex injection
+    const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const user = await User.findOne({ 
+      username: { $regex: new RegExp(`^${escapedUsername}$`, 'i') } 
+    });
+    
+    if (!user) {
+      console.log('User not found:', username);
+      return res.render('login', { error: 'Invalid username or password' });
+    }
+    
+    console.log('User found:', user.username, 'Role:', user.role);
+    
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    if (!isValidPassword) {
+      console.log('Invalid password for user:', username);
+      return res.render('login', { error: 'Invalid username or password' });
+    }
+    
+    console.log('Password valid for user:', username);
+    
+    // Check if user needs to reset password
+    if (user.needs_password_reset) {
+      console.log('User needs password reset:', username);
+      req.session.userId = user._id;
+      req.session.username = user.username;
+      req.session.needsPasswordReset = true;
+      return res.redirect('/reset-password');
+    }
+    
+    // Set session data
+    req.session.userId = user._id;
+    req.session.username = user.username;
+    req.session.role = user.role;
+    req.session.hourlyRate = user.hourly_rate;
+    
+    console.log('Session data set:', {
+      userId: req.session.userId,
+      username: req.session.username,
+      role: req.session.role
+    });
+    
+    // Save session before redirect
+    req.session.save((err) => {
+      if (err) {
+        console.error('Session save error:', err);
+        return res.render('login', { error: 'Session error occurred' });
+      }
+      console.log('Session saved, redirecting to dashboard');
+      res.redirect('/dashboard');
+    });
+    
+  } catch (err) {
+    console.error('Login error:', err);
+    console.error('Error stack:', err.stack);
+    res.render('login', { error: 'An error occurred during login' });
+  }
+});
+
+
+app.get('/dashboard', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const currentDate = moment().format('YYYY-MM-DD');
+    
+    // Get today's time entries
+    const todayEntries = await TimeEntry.find({
+      user_id: userId,
+      clock_in: {
+        $gte: moment().startOf('day').toDate(),
+        $lt: moment().endOf('day').toDate()
+      }
+    }).sort({ clock_in: -1 });
+    
+    // Get current clock status
+    const currentEntry = await TimeEntry.findOne({
+      user_id: userId,
+      clock_out: null
+    }).sort({ clock_in: -1 });
+    
+    // Get monthly summary
+    const monthStart = moment().startOf('month').toDate();
+    const monthEnd = moment().endOf('month').toDate();
+    
+    const monthlyEntries = await TimeEntry.find({
+      user_id: userId,
+      clock_in: { $gte: monthStart, $lt: monthEnd }
+    });
+    
+    let totalHours = 0;
+    monthlyEntries.forEach(entry => {
+      const endTime = entry.clock_out || new Date();
+      const hours = (endTime - entry.clock_in) / (1000 * 60 * 60);
+      totalHours += hours;
+    });
+    
+    const estimatedPay = 0; // Hourly rates removed
+    
+    // Get active announcements
+    const now = new Date();
+    const announcements = await Announcement.find({
+      is_active: true,
+      start_date: { $lte: now },
+      $or: [
+        { end_date: null },
+        { end_date: { $gte: now } }
+      ]
+    }).sort({ created_at: -1 }).limit(5);
+    
+    res.render('dashboard', {
+      user: {
+        username: req.session.username,
+        role: req.session.role,
+        hourlyRate: req.session.hourlyRate
+      },
+      todayEntries,
+      currentEntry,
+        monthlySummary: {
+          totalHours: totalHours.toFixed(2),
+          estimatedPay: '0.00' // Hourly rates removed
+        },
+      currentDate,
+      announcements
+    });
+  } catch (err) {
+    console.error('Dashboard error:', err);
+    res.status(500).send('Error loading dashboard');
+  }
+});
+
+app.post('/clockin', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const timeEntry = new TimeEntry({
+      user_id: userId,
+      clock_in: new Date()
+    });
+    
+    await timeEntry.save();
+    
+    res.json({ success: true, entryId: timeEntry._id });
+  } catch (err) {
+    console.error('Clock in error:', err);
+    res.status(500).json({ success: false, error: 'Failed to clock in' });
+  }
+});
+
+app.post('/clockout', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const result = await TimeEntry.findOneAndUpdate(
+      { user_id: userId, clock_out: null },
+      { clock_out: new Date() },
+      { sort: { clock_in: -1 }, new: true }
+    );
+    
+    if (!result) {
+      return res.status(400).json({ success: false, error: 'No active clock in found' });
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Clock out error:', err);
+    res.status(500).json({ success: false, error: 'Failed to clock out' });
+  }
+});
+
+// Add notes to current time entry
+app.post('/add-notes', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const { notes } = req.body;
+    
+    const result = await TimeEntry.findOneAndUpdate(
+      { user_id: userId, clock_out: null },
+      { notes },
+      { sort: { clock_in: -1 }, new: true }
+    );
+    
+    if (!result) {
+      return res.status(400).json({ success: false, error: 'No active clock in found' });
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Add notes error:', err);
+    res.status(500).json({ success: false, error: 'Failed to add notes' });
+  }
+});
+
+// Update existing time entry notes
+app.post('/update-entry-notes', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const { entryId, notes } = req.body;
+    
+    const result = await TimeEntry.findOneAndUpdate(
+      { _id: entryId, user_id: userId },
+      { notes },
+      { new: true }
+    );
+    
+    if (!result) {
+      return res.status(404).json({ success: false, error: 'Time entry not found' });
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Update notes error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update notes' });
+  }
+});
+
+app.get('/calendar', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const { month, year } = req.query;
+    const targetMonth = month || moment().month() + 1;
+    const targetYear = year || moment().year();
+    
+    // Ensure proper date formatting with padding
+    const monthStr = targetMonth.toString().padStart(2, '0');
+    const monthStart = moment(`${targetYear}-${monthStr}-01`, 'YYYY-MM-DD').startOf('month').toDate();
+    const monthEnd = moment(`${targetYear}-${monthStr}-01`, 'YYYY-MM-DD').endOf('month').toDate();
+    
+    // Get aggregated calendar data with proper day splitting
+    // We need to handle entries that span multiple days
+    const allEntries = await TimeEntry.find({
+      user_id: userId,
+      clock_in: { $gte: monthStart, $lt: monthEnd }
+    }).sort({ clock_in: 1 });
+    
+    // Manually aggregate with day splitting
+    const calendarData = [];
+    const hoursByDate = {};
+    const entriesByDateCount = {};
+    
+    allEntries.forEach(entry => {
+      const clockIn = moment(entry.clock_in);
+      const clockOut = entry.clock_out ? moment(entry.clock_out) : moment();
+      
+      // If entry spans multiple days, split it
+      const startDate = clockIn.clone().startOf('day');
+      const endDate = clockOut.clone().startOf('day');
+      
+      if (startDate.isSame(endDate, 'day')) {
+        // Entry is within the same day
+        const dateStr = startDate.format('YYYY-MM-DD');
+        const hours = (clockOut - clockIn) / (1000 * 60 * 60);
+        
+        if (!hoursByDate[dateStr]) {
+          hoursByDate[dateStr] = 0;
+          entriesByDateCount[dateStr] = 0;
+        }
+        hoursByDate[dateStr] += hours;
+        entriesByDateCount[dateStr] += 1;
+      } else {
+        // Entry spans multiple days - split it
+        let currentDate = startDate.clone();
+        while (currentDate.isSameOrBefore(endDate, 'day')) {
+          const dateStr = currentDate.format('YYYY-MM-DD');
+          
+          // Calculate hours for this day
+          const dayStart = currentDate.clone().startOf('day');
+          const dayEnd = currentDate.clone().endOf('day');
+          
+          const entryStart = currentDate.isSame(startDate, 'day') ? clockIn : dayStart;
+          const entryEnd = currentDate.isSame(endDate, 'day') ? clockOut : dayEnd;
+          
+          const hoursWorked = (entryEnd - entryStart) / (1000 * 60 * 60);
+          if (hoursWorked > 0) {
+            if (!hoursByDate[dateStr]) {
+              hoursByDate[dateStr] = 0;
+              entriesByDateCount[dateStr] = 0;
+            }
+            hoursByDate[dateStr] += hoursWorked;
+            // Only count as a separate entry if it's a significant portion of the day
+            if (hoursWorked > 0.5) { // More than 30 minutes
+              entriesByDateCount[dateStr] += 1;
+            }
+          }
+          
+          currentDate.add(1, 'day');
+        }
+      }
+    });
+    
+    // Convert to array format
+    Object.keys(hoursByDate).forEach(dateStr => {
+      calendarData.push({
+        date: dateStr,
+        hours: hoursByDate[dateStr],
+        entries: entriesByDateCount[dateStr] || 1
+      });
+    });
+    
+    // Sort by date
+    calendarData.sort((a, b) => a.date.localeCompare(b.date));
+    
+    // Get detailed time entries for the month
+    const detailedEntries = await TimeEntry.find({
+      user_id: userId,
+      clock_in: { $gte: monthStart, $lt: monthEnd }
+    }).sort({ clock_in: 1 });
+    
+    // Group detailed entries by date and handle entries that span multiple days
+    const entriesByDate = {};
+    detailedEntries.forEach(entry => {
+      const plainEntry = entry.toObject ? entry.toObject() : entry;
+      const clockIn = moment(plainEntry.clock_in);
+      const clockOut = plainEntry.clock_out ? moment(plainEntry.clock_out) : moment();
+      
+      // If entry spans multiple days, we need to split it
+      const startDate = clockIn.clone().startOf('day');
+      const endDate = clockOut.clone().startOf('day');
+      
+      if (startDate.isSame(endDate, 'day')) {
+        // Entry is within the same day
+        const dateStr = startDate.format('YYYY-MM-DD');
+        if (!entriesByDate[dateStr]) {
+          entriesByDate[dateStr] = [];
+        }
+        entriesByDate[dateStr].push({
+          clock_in: plainEntry.clock_in,
+          clock_out: plainEntry.clock_out,
+          notes: plainEntry.notes
+        });
+      } else {
+        // Entry spans multiple days - split it
+        let currentDate = startDate.clone();
+        while (currentDate.isSameOrBefore(endDate, 'day')) {
+          const dateStr = currentDate.format('YYYY-MM-DD');
+          if (!entriesByDate[dateStr]) {
+            entriesByDate[dateStr] = [];
+          }
+          
+          // Calculate hours for this day
+          const dayStart = currentDate.clone().startOf('day');
+          const dayEnd = currentDate.clone().endOf('day');
+          
+          const entryStart = currentDate.isSame(startDate, 'day') ? clockIn : dayStart;
+          const entryEnd = currentDate.isSame(endDate, 'day') ? clockOut : dayEnd;
+          
+          // Only add if there are actual hours worked on this day
+          const hoursWorked = (entryEnd - entryStart) / (1000 * 60 * 60);
+          if (hoursWorked > 0) {
+            entriesByDate[dateStr].push({
+              clock_in: entryStart.toDate(),
+              clock_out: entryEnd.toDate(),
+              notes: plainEntry.notes,
+              is_partial: true
+            });
+          }
+          
+          currentDate.add(1, 'day');
+        }
+      }
+    });
+    
+    res.render('calendar', {
+      user: {
+        username: req.session.username,
+        role: req.session.role
+      },
+      calendarData,
+      entriesByDate: JSON.stringify(entriesByDate),
+      currentMonth: targetMonth,
+      currentYear: targetYear,
+      monthName: moment(`${targetYear}-${targetMonth}-01`).format('MMMM YYYY')
+    });
+  } catch (err) {
+    console.error('Calendar error:', err);
+    res.status(500).send('Error loading calendar');
+  }
+});
+
+// Admin routes
+app.get('/admin', requireAdmin, async (req, res) => {
+  try {
+    const users = await User.aggregate([
+      {
+        $lookup: {
+          from: 'timeentries',
+          localField: '_id',
+          foreignField: 'user_id',
+          as: 'timeEntries'
+        }
+      },
+      {
+        $project: {
+          username: 1,
+          email: 1,
+          role: 1,
+          hourly_rate: 1,
+          total_entries: { $size: '$timeEntries' },
+          total_hours: {
+            $sum: {
+              $map: {
+                input: '$timeEntries',
+                as: 'entry',
+                in: {
+                  $divide: [
+                    { $subtract: [{ $ifNull: ['$$entry.clock_out', new Date()] }, '$$entry.clock_in'] },
+                    1000 * 60 * 60
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      { $sort: { role: 1, username: 1 } }
+    ]);
+    
+    res.render('admin', {
+      user: {
+        username: req.session.username,
+        role: req.session.role
+      },
+      users
+    });
+  } catch (err) {
+    console.error('Admin error:', err);
+    res.status(500).send('Error loading admin panel');
+  }
+});
+
+app.get('/admin/user/:id', requireAdmin, async (req, res) => {
+  try {
+    const userId = req.params.id;
+    
+    const userData = await User.findById(userId);
+    if (!userData) {
+      return res.redirect('/admin');
+    }
+    
+    const timeEntries = await TimeEntry.find({ user_id: userId })
+      .sort({ clock_in: -1 })
+      .limit(100);
+    
+    res.render('admin-user', {
+      user: {
+        username: req.session.username,
+        role: req.session.role
+      },
+      userData,
+      timeEntries
+    });
+  } catch (err) {
+    console.error('Admin user error:', err);
+    res.redirect('/admin');
+  }
+});
+
+app.post('/admin/add-time', requireAdmin, async (req, res) => {
+  try {
+    const { userId, date, hours, minutes } = req.body;
+    const clockIn = moment(`${date} 09:00:00`).toDate();
+    const clockOut = moment(clockIn).add(hours, 'hours').add(minutes, 'minutes').toDate();
+    
+    const timeEntry = new TimeEntry({
+      user_id: userId,
+      clock_in: clockIn,
+      clock_out: clockOut
+    });
+    
+    await timeEntry.save();
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Add time error:', err);
+    res.status(500).json({ success: false, error: 'Failed to add time' });
+  }
+});
+
+app.post('/admin/remove-time', requireAdmin, async (req, res) => {
+  try {
+    const { entryId } = req.body;
+    await TimeEntry.findByIdAndDelete(entryId);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Remove time error:', err);
+    res.status(500).json({ success: false, error: 'Failed to remove time entry' });
+  }
+});
+
+// User management routes
+app.post('/admin/edit-user', requireAdmin, async (req, res) => {
+  try {
+    const { userId, username, email, role, hourly_rate } = req.body;
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { 
+        username, 
+        email, 
+        role, 
+        hourly_rate: parseFloat(hourly_rate) 
+      },
+      { new: true }
+    );
+    
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    res.json({ success: true, user: updatedUser });
+  } catch (err) {
+    console.error('Edit user error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update user' });
+  }
+});
+
+app.post('/admin/delete-user', requireAdmin, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    // Don't allow deleting the admin user
+    const user = await User.findById(userId);
+    if (user && user.username === 'admin') {
+      return res.status(400).json({ success: false, error: 'Cannot delete admin user' });
+    }
+    
+    // Delete user's time entries first
+    await TimeEntry.deleteMany({ user_id: userId });
+    
+    // Delete the user
+    await User.findByIdAndDelete(userId);
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete user error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete user' });
+  }
+});
+
+app.post('/admin/create-user', requireAdmin, async (req, res) => {
+  try {
+    const { username, password, email, role, hourly_rate } = req.body;
+    
+    // Check if user already exists
+    const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const existingUser = await User.findOne({ 
+      username: { $regex: new RegExp(`^${escapedUsername}$`, 'i') } 
+    });
+    if (existingUser) {
+      return res.status(400).json({ success: false, error: 'Username already exists' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const newUser = new User({
+      username,
+      password: hashedPassword,
+      email,
+      role: role || 'employee',
+      hourly_rate: parseFloat(hourly_rate) || 20.0
+    });
+    
+    await newUser.save();
+    
+    res.json({ success: true, user: newUser });
+  } catch (err) {
+    console.error('Create user error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create user' });
+  }
+});
+
+// Generate a random temporary password
+function generateTemporaryPassword() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let password = '';
+  for (let i = 0; i < 10; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return password;
+}
+
+app.post('/admin/reset-password', requireAdmin, async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    // Generate a temporary password
+    const tempPassword = generateTemporaryPassword();
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { 
+        password: hashedPassword,
+        needs_password_reset: true,
+        temporary_password: tempPassword
+      },
+      { new: true }
+    );
+    
+    if (!updatedUser) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    res.json({ 
+      success: true, 
+      temporaryPassword: tempPassword,
+      message: `Temporary password generated: ${tempPassword}. User will be required to reset password on next login.`
+    });
+  } catch (err) {
+    console.error('Reset password error:', err);
+    res.status(500).json({ success: false, error: 'Failed to reset password' });
+  }
+});
+
+// Password reset page for users
+app.get('/reset-password', requireAuth, async (req, res) => {
+  if (!req.session.needsPasswordReset) {
+    return res.redirect('/dashboard');
+  }
+  
+  res.render('reset-password', { error: null });
+});
+
+app.post('/reset-password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    const userId = req.session.userId;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.render('reset-password', { error: 'User not found' });
+    }
+    
+    // Verify current password
+    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
+    if (!isValidPassword) {
+      return res.render('reset-password', { error: 'Current password is incorrect' });
+    }
+    
+    // Check if new passwords match
+    if (newPassword !== confirmPassword) {
+      return res.render('reset-password', { error: 'New passwords do not match' });
+    }
+    
+    // Update password and clear reset flag
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await User.findByIdAndUpdate(userId, {
+      password: hashedPassword,
+      needs_password_reset: false,
+      temporary_password: null
+    });
+    
+    // Clear the reset flag from session
+    req.session.needsPasswordReset = false;
+    req.session.role = user.role;
+    req.session.hourlyRate = user.hourly_rate;
+    
+    res.redirect('/dashboard');
+  } catch (err) {
+    console.error('Password reset error:', err);
+    res.render('reset-password', { error: 'An error occurred while resetting password' });
+  }
+});
+
+app.get('/admin/export', requireAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const start = startDate ? new Date(startDate) : new Date('2024-01-01');
+    const end = endDate ? new Date(endDate) : new Date('2024-12-31');
+    
+    const data = await TimeEntry.aggregate([
+      {
+        $match: {
+          clock_in: { $gte: start, $lt: end }
+        }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'user_id',
+          foreignField: '_id',
+          as: 'user'
+        }
+      },
+      { $unwind: '$user' },
+      {
+        $project: {
+          username: '$user.username',
+          email: '$user.email',
+          hourly_rate: '$user.hourly_rate',
+          clock_in: 1,
+          clock_out: 1,
+          hours: {
+            $divide: [
+              { $subtract: [{ $ifNull: ['$clock_out', new Date()] }, '$clock_in'] },
+              1000 * 60 * 60
+            ]
+          },
+          notes: 1
+        }
+      },
+      { $sort: { clock_in: 1 } }
+    ]);
+    
+    const csvWriter = createObjectCsvWriter({
+      path: 'temp-export.csv',
+      header: [
+        { id: 'username', title: 'Employee' },
+        { id: 'email', title: 'Email' },
+        { id: 'hourly_rate', title: 'Hourly Rate' },
+        { id: 'clock_in', title: 'Clock In' },
+        { id: 'clock_out', title: 'Clock Out' },
+        { id: 'hours', title: 'Hours Worked' },
+        { id: 'notes', title: 'Notes' }
+      ]
+    });
+    
+    await csvWriter.writeRecords(data);
+    res.download('temp-export.csv', `time-entries-${moment().format('YYYY-MM-DD')}.csv`);
+  } catch (err) {
+    console.error('Export error:', err);
+    res.status(500).send('Error exporting data');
+  }
+});
+
+app.get('/handbook', requireAuth, async (req, res) => {
+  try {
+    // Get hierarchy data grouped by company and level
+    const hierarchyData = await Hierarchy.find({ is_active: true })
+      .sort({ company: 1, level: 1, order: 1 });
+    
+    // Group by company and level
+    const lanforgeHierarchy = hierarchyData.filter(h => h.company === 'LANForge');
+    const ascendanceHierarchy = hierarchyData.filter(h => h.company === 'Ascendance');
+    
+    // Group by level for easier rendering
+    const lanforgeByLevel = {};
+    const ascendanceByLevel = {};
+    
+    lanforgeHierarchy.forEach(person => {
+      if (!lanforgeByLevel[person.level]) {
+        lanforgeByLevel[person.level] = [];
+      }
+      lanforgeByLevel[person.level].push(person);
+    });
+    
+    ascendanceHierarchy.forEach(person => {
+      if (!ascendanceByLevel[person.level]) {
+        ascendanceByLevel[person.level] = [];
+      }
+      ascendanceByLevel[person.level].push(person);
+    });
+    
+    res.render('handbook', {
+      user: {
+        username: req.session.username,
+        role: req.session.role
+      },
+      lanforgeHierarchy: lanforgeByLevel,
+      ascendanceHierarchy: ascendanceByLevel
+    });
+  } catch (err) {
+    console.error('Handbook error:', err);
+    res.status(500).send('Error loading handbook');
+  }
+});
+
+// Submit help inquiry
+app.post('/api/help-inquiry', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const username = req.session.username;
+    const {
+      inquiryType,
+      submitterName,
+      submitterEmail,
+      subject,
+      details,
+      urgency,
+      incidentDate,
+      involvedParties
+    } = req.body;
+    
+    // Validate required fields
+    if (!inquiryType || !subject || !details) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Inquiry type, subject, and details are required' 
+      });
+    }
+    
+    const helpInquiry = new HelpInquiry({
+      user_id: userId,
+      username: username,
+      inquiry_type: inquiryType,
+      submitter_name: submitterName || null,
+      submitter_email: submitterEmail || null,
+      subject: subject,
+      details: details,
+      urgency: urgency || 'medium',
+      incident_date: incidentDate ? new Date(incidentDate) : null,
+      involved_parties: involvedParties || null,
+      is_anonymous: !submitterName && !submitterEmail,
+      status: 'new'
+    });
+    
+    await helpInquiry.save();
+    
+    // Log the submission (in production, you might want to send email notifications)
+    console.log(`Help inquiry submitted: ${inquiryType} - ${subject} by ${submitterName || 'anonymous'}`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Your inquiry has been submitted successfully.',
+      inquiryId: helpInquiry._id
+    });
+  } catch (err) {
+    console.error('Help inquiry submission error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to submit inquiry. Please try again.' 
+    });
+  }
+});
+
+// Admin route to view help inquiries
+app.get('/admin/help-inquiries', requireAdmin, async (req, res) => {
+  try {
+    const inquiries = await HelpInquiry.find()
+      .sort({ created_at: -1 })
+      .populate('user_id', 'username email');
+    
+    res.render('admin-help-inquiries', {
+      user: {
+        username: req.session.username,
+        role: req.session.role
+      },
+      inquiries
+    });
+  } catch (err) {
+    console.error('Admin help inquiries error:', err);
+    res.status(500).send('Error loading help inquiries');
+  }
+});
+
+// Update inquiry status
+app.post('/admin/help-inquiry/update-status', requireAdmin, async (req, res) => {
+  try {
+    const { inquiryId, status, adminNotes } = req.body;
+    
+    const updatedInquiry = await HelpInquiry.findByIdAndUpdate(
+      inquiryId,
+      { 
+        status: status,
+        admin_notes: adminNotes,
+        updated_at: new Date()
+      },
+      { new: true }
+    );
+    
+    if (!updatedInquiry) {
+      return res.status(404).json({ success: false, error: 'Inquiry not found' });
+    }
+    
+    res.json({ success: true, inquiry: updatedInquiry });
+  } catch (err) {
+    console.error('Update inquiry status error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update inquiry status' });
+  }
+});
+
+// Announcement routes
+app.get('/admin/announcements', requireAdmin, async (req, res) => {
+  try {
+    const announcements = await Announcement.find()
+      .sort({ created_at: -1 })
+      .populate('created_by', 'username');
+    
+    res.render('admin-announcements', {
+      user: {
+        username: req.session.username,
+        role: req.session.role
+      },
+      announcements
+    });
+  } catch (err) {
+    console.error('Admin announcements error:', err);
+    res.status(500).send('Error loading announcements');
+  }
+});
+
+app.post('/api/announcements', requireAdmin, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const {
+      title,
+      content,
+      type,
+      display_type,
+      start_date,
+      end_date,
+      is_active
+    } = req.body;
+    
+    // Validate required fields
+    if (!title || !content) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Title and content are required' 
+      });
+    }
+    
+    const announcement = new Announcement({
+      title,
+      content,
+      type: type || 'info',
+      display_type: display_type || 'banner',
+      start_date: start_date ? new Date(start_date) : new Date(),
+      end_date: end_date ? new Date(end_date) : null,
+      is_active: is_active !== undefined ? is_active : true,
+      created_by: userId
+    });
+    
+    await announcement.save();
+    
+    res.json({ 
+      success: true, 
+      message: 'Announcement created successfully.',
+      announcementId: announcement._id
+    });
+  } catch (err) {
+    console.error('Create announcement error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to create announcement. Please try again.' 
+    });
+  }
+});
+
+app.put('/api/announcements/:id', requireAdmin, async (req, res) => {
+  try {
+    const announcementId = req.params.id;
+    const {
+      title,
+      content,
+      type,
+      display_type,
+      start_date,
+      end_date,
+      is_active
+    } = req.body;
+    
+    const updatedAnnouncement = await Announcement.findByIdAndUpdate(
+      announcementId,
+      {
+        title,
+        content,
+        type,
+        display_type,
+        start_date: start_date ? new Date(start_date) : undefined,
+        end_date: end_date ? new Date(end_date) : undefined,
+        is_active,
+        updated_at: new Date()
+      },
+      { new: true }
+    );
+    
+    if (!updatedAnnouncement) {
+      return res.status(404).json({ success: false, error: 'Announcement not found' });
+    }
+    
+    res.json({ success: true, announcement: updatedAnnouncement });
+  } catch (err) {
+    console.error('Update announcement error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update announcement' });
+  }
+});
+
+app.delete('/api/announcements/:id', requireAdmin, async (req, res) => {
+  try {
+    const announcementId = req.params.id;
+    
+    const deletedAnnouncement = await Announcement.findByIdAndDelete(announcementId);
+    
+    if (!deletedAnnouncement) {
+      return res.status(404).json({ success: false, error: 'Announcement not found' });
+    }
+    
+    res.json({ success: true, message: 'Announcement deleted successfully' });
+  } catch (err) {
+    console.error('Delete announcement error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete announcement' });
+  }
+});
+
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login');
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+});

@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --secondary: #10b981;
+  --background: #111827; /* gray-900 */
+  --surface: #1f2937;    /* gray-800 */
+  --text-main: #f9fafb;  /* gray-50 */
+  --text-muted: #9ca3af; /* gray-400 */
+  --border: #374151;     /* gray-700 */
+}
+
+body {
+  margin: 0;
+  background-color: var(--background);
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color-scheme: dark;
+}
+
+/* Base styles for unstyled elements */
+input, textarea, select {
+  background-color: var(--surface);
+  color: var(--text-main);
+  border-color: var(--border);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted);
+}
+
+/* Handbook Styles */
+.handbook-content {
+  color: var(--text-main);
+  line-height: 1.6;
+  text-align: left;
+}
+
+.handbook-content h1 {
+  font-size: 2.25rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--primary);
+}
+
+.handbook-content h2 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.handbook-content h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.handbook-content h4 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.handbook-content p {
+  margin-bottom: 1rem;
+  color: var(--text-muted);
+}
+
+.handbook-content ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1.5rem;
+  color: var(--text-muted);
+}
+
+.handbook-content li {
+  margin-bottom: 0.25rem;
+}
+
+.handbook-content strong {
+  color: var(--text-main);
+  font-weight: 600;
+}

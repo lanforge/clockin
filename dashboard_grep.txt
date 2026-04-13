@@ -1,0 +1,21 @@
+134:      {/* Announcements */}
+135-      {announcements && announcements.length > 0 && (
+136-        <div className="space-y-3">
+137-          {announcements.map(ann => (
+138-            <div key={ann._id} className={`p-4 rounded-lg border ${
+139-              ann.type === 'urgent' ? 'bg-red-900/50 border-red-800 text-red-800' :
+140-              ann.type === 'warning' ? 'bg-yellow-900/50 border-yellow-800 text-yellow-200' :
+141-              ann.type === 'success' ? 'bg-green-900/50 border-green-800 text-green-200' :
+142-              'bg-blue-900/50 border-blue-800 text-blue-200'
+143-            }`}>
+144-              <div className="flex justify-between items-start">
+145-                <h3 className="font-semibold">{ann.title}</h3>
+146-                <span className="text-xs opacity-75">{moment(ann.created_at).fromNow()}</span>
+147-              </div>
+148-              <p className="text-sm mt-1">{ann.content}</p>
+149-            </div>
+150-          ))}
+151-        </div>
+152-      )}
+153-
+154-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
