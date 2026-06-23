@@ -1,11 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import moment from 'moment';
-import { ChevronLeft, ChevronRight, Clock, AlertCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Clock, AlertCircle, Video, MapPin, ExternalLink, Check, X, HelpCircle, Repeat, Bell } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
+import { describeMeetingTime, detectTz } from '../utils/datetime';
 
 export default function Calendar() {
+  const { user } = useAuth();
+  const viewerTz = user?.timezone || detectTz();
   const [currentDate, setCurrentDate] = useState(moment());
   const [data, setData] = useState(null);
+  const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -24,9 +29,69 @@ export default function Calendar() {
     }
   };
 
+  const fetchMeetings = async () => {
+    try {
+      const res = await axios.get('/api/meetings');
+      if (res.data.success) {
+        setMeetings(res.data.data.meetings);
+      }
+    } catch (err) {
+      console.error('Failed to fetch meetings', err);
+    }
+  };
+
+  const handleRsvp = async (meetingId, status) => {
+    try {
+      await axios.post(`/api/meetings/${meetingId}/rsvp`, { status });
+      fetchMeetings();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update RSVP');
+    }
+  };
+
   useEffect(() => {
     fetchCalendar(currentDate.month() + 1, currentDate.year());
   }, [currentDate]);
+
+  useEffect(() => {
+    fetchMeetings();
+  }, []);
+
+  const meetingsByDate = {};
+  meetings.forEach(m => {
+    const key = moment(m.start_time).format('YYYY-MM-DD');
+    if (!meetingsByDate[key]) meetingsByDate[key] = [];
+    meetingsByDate[key].push(m);
+  });
+
+  const MAX_PER_SERIES = 3;
+  const seriesCounts = {};
+  const upcomingMeetings = meetings
+    .filter(m => moment(m.start_time).isSameOrAfter(moment().startOf('day')))
+    .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+    .filter(m => {
+      const key = m._id;
+      seriesCounts[key] = (seriesCounts[key] || 0) + 1;
+      return seriesCounts[key] <= MAX_PER_SERIES;
+    });
+
+  const now = moment();
+  const alertMeetings = meetings.filter(m => {
+    if (m.alert_dismissed) return false;
+    const start = moment(m.start_time);
+    return start.isAfter(now) && start.diff(now, 'hours', true) <= 24;
+  });
+
+  const handleDismissAlert = async (meeting) => {
+    try {
+      await axios.post(`/api/meetings/${meeting._id}/dismiss-alert`, {
+        occurrence_start: meeting.occurrence_start || meeting.start_time
+      });
+      fetchMeetings();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to dismiss alert');
+    }
+  };
 
   const nextMonth = () => {
     setCurrentDate(moment(currentDate).add(1, 'month'));
@@ -65,9 +130,11 @@ export default function Calendar() {
         });
       }
 
+      const dayMeetings = meetingsByDate[dateStr] || [];
+
       daysInMonthArray.push(
-        <div 
-          key={d} 
+        <div
+          key={d}
           className={`h-24 border rounded-lg p-2 flex flex-col ${isToday ? 'border-indigo-400 bg-indigo-900/50/30' : 'border-gray-600 bg-gray-800'}`}
         >
           <div className="flex justify-between items-start">
@@ -78,8 +145,14 @@ export default function Calendar() {
               </span>
             )}
           </div>
-          
+
           <div className="flex-1 mt-1 overflow-y-auto no-scrollbar space-y-1">
+            {dayMeetings.map(m => (
+              <div key={m.occurrence_id || m._id} className="text-[10px] leading-tight p-1 bg-purple-900/40 rounded text-purple-100 truncate border border-purple-800/60 flex items-center" title={m.title}>
+                <Video size={10} className="mr-1 flex-shrink-0" />
+                <span className="truncate">{moment(m.start_time).format('HH:mm')} {m.title}</span>
+              </div>
+            ))}
             {dayData && dayData.map((entry, idx) => (
               <div key={idx} className="text-[10px] leading-tight p-1 bg-gray-900 rounded text-gray-300 truncate border border-gray-700">
                 {moment(entry.clock_in).format('HH:mm')} - {entry.clock_out ? moment(entry.clock_out).format('HH:mm') : 'Active'}
@@ -129,6 +202,43 @@ export default function Calendar() {
         </div>
       )}
 
+      {alertMeetings.length > 0 && (
+        <div className="space-y-3">
+          {alertMeetings.map(m => {
+            const start = moment(m.start_time);
+            const hoursAway = start.diff(moment(), 'hours');
+            const minutesAway = start.diff(moment(), 'minutes') % 60;
+            const { primary: alertPrimary, secondary: alertSecondary } = describeMeetingTime(m, viewerTz);
+            return (
+              <div key={m.occurrence_id || m._id} className="bg-amber-900/30 border border-amber-700 rounded-lg p-4 flex items-start gap-3">
+                <Bell className="text-amber-300 flex-shrink-0 mt-0.5" size={20} />
+                <div className="flex-1 min-w-0">
+                  <h4 className="font-semibold text-amber-100">{m.title}</h4>
+                  <p className="text-sm text-amber-200 mt-1">
+                    Starts {hoursAway > 0 ? `${hoursAway}h ${minutesAway}m` : `${minutesAway}m`} from now · {alertPrimary}
+                  </p>
+                  {alertSecondary && (
+                    <p className="text-xs text-amber-300/80 mt-0.5">Your time: {alertSecondary}</p>
+                  )}
+                  {m.link && (
+                    <a href={m.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center mt-2 text-sm text-indigo-300 hover:text-indigo-200">
+                      <ExternalLink size={14} className="mr-1" /> Join meeting
+                    </a>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleDismissAlert(m)}
+                  className="text-amber-300 hover:text-amber-100 p-1"
+                  title="Dismiss"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700 overflow-x-auto">
         <div className="min-w-[600px]">
           <div className="grid grid-cols-7 gap-2 mb-4">
@@ -150,6 +260,88 @@ export default function Calendar() {
           )}
         </div>
       </div>
+
+      {upcomingMeetings.length > 0 && (
+        <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+          <h3 className="text-lg font-semibold mb-4 text-white flex items-center">
+            <Video className="mr-2 text-purple-400" size={20} />
+            Upcoming Meetings
+          </h3>
+          <div className="space-y-3">
+            {upcomingMeetings.map(m => {
+              const key = m.occurrence_id || m._id;
+              const rsvpButton = (status, label, Icon, activeClass) => (
+                <button
+                  key={status}
+                  onClick={() => handleRsvp(m._id, status)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-medium border inline-flex items-center transition-colors ${
+                    m.my_status === status
+                      ? activeClass
+                      : 'border-gray-600 text-gray-300 hover:bg-gray-700'
+                  }`}
+                >
+                  <Icon size={14} className="mr-1" />
+                  {label}
+                </button>
+              );
+
+              return (
+                <div key={key} className="border border-gray-700 rounded-lg p-4 bg-gray-900">
+                  <div className="flex flex-col md:flex-row md:justify-between md:items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-white">{m.title}</h4>
+                      {(() => {
+                        const { primary, secondary } = describeMeetingTime(m, viewerTz);
+                        return (
+                          <>
+                            <div className="mt-1 text-sm text-gray-300 flex flex-wrap items-center gap-2">
+                              <span>{primary}</span>
+                              {m.recurrence && m.recurrence !== 'none' && (
+                                <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-indigo-900/50 text-indigo-200 border border-indigo-800">
+                                  <Repeat size={12} className="mr-1" />
+                                  {m.recurrence_label || m.recurrence}
+                                </span>
+                              )}
+                            </div>
+                            {secondary && (
+                              <div className="text-xs text-gray-400 mt-0.5">Your time: {secondary}</div>
+                            )}
+                          </>
+                        );
+                      })()}
+                      {m.description && (
+                        <p className="mt-2 text-sm text-gray-400 whitespace-pre-wrap">{m.description}</p>
+                      )}
+                      <div className="mt-2 flex flex-wrap gap-3 text-sm">
+                        {m.link && (
+                          <a
+                            href={m.link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center text-indigo-400 hover:text-indigo-300"
+                          >
+                            <ExternalLink size={14} className="mr-1" /> Join meeting
+                          </a>
+                        )}
+                        {m.location && (
+                          <span className="inline-flex items-center text-gray-400">
+                            <MapPin size={14} className="mr-1" /> {m.location}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {rsvpButton('accepted', 'Going', Check, 'bg-green-700/40 border-green-600 text-green-100')}
+                      {rsvpButton('maybe', 'Maybe', HelpCircle, 'bg-yellow-700/40 border-yellow-600 text-yellow-100')}
+                      {rsvpButton('declined', 'Not Going', X, 'bg-red-700/40 border-red-600 text-red-100')}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {!loading && data?.calendarData && data.calendarData.length > 0 && (
         <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700 mt-6">

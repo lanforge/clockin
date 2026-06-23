@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import moment from 'moment';
 import { useAuth } from '../contexts/AuthContext';
-import { Clock, CheckCircle2, XCircle, AlertCircle, Play, Square, MessageSquare } from 'lucide-react';
+import { Clock, CheckCircle2, XCircle, AlertCircle, Play, Square, MessageSquare, Video, ExternalLink, MapPin, Check, X as XIcon, HelpCircle, Repeat, Target } from 'lucide-react';
+import { describeMeetingTime, detectTz } from '../utils/datetime';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -14,6 +15,9 @@ export default function Dashboard() {
   const [elapsedTime, setElapsedTime] = useState('00:00:00');
   const [dynamicTotalHours, setDynamicTotalHours] = useState('0.0000');
   const [dynamicEstimatedPay, setDynamicEstimatedPay] = useState('0.0000');
+  const [pendingMeeting, setPendingMeeting] = useState(null);
+  const [rsvpSubmitting, setRsvpSubmitting] = useState(false);
+  const [salesGoal, setSalesGoal] = useState(null);
 
   const fetchDashboard = async () => {
     try {
@@ -34,8 +38,47 @@ export default function Dashboard() {
     }
   };
 
+  const fetchPendingMeeting = async () => {
+    try {
+      const res = await axios.get('/api/meetings');
+      if (res.data.success) {
+        const now = new Date();
+        const next = res.data.data.meetings
+          .filter(m => m.my_status === 'pending' && new Date(m.start_time) > now)
+          .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))[0] || null;
+        setPendingMeeting(next);
+      }
+    } catch (err) {
+      console.error('Failed to fetch meetings', err);
+    }
+  };
+
+  const handleRsvp = async (status) => {
+    if (!pendingMeeting) return;
+    setRsvpSubmitting(true);
+    try {
+      await axios.post(`/api/meetings/${pendingMeeting._id}/rsvp`, { status });
+      await fetchPendingMeeting();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to RSVP');
+    } finally {
+      setRsvpSubmitting(false);
+    }
+  };
+
+  const fetchSalesGoal = async () => {
+    try {
+      const res = await axios.get('/api/sales-goal');
+      if (res.data.success) setSalesGoal(res.data.data.goal);
+    } catch (err) {
+      console.error('Failed to fetch sales goal', err);
+    }
+  };
+
   useEffect(() => {
     fetchDashboard();
+    fetchPendingMeeting();
+    fetchSalesGoal();
   }, []);
 
   useEffect(() => {
@@ -129,8 +172,49 @@ export default function Dashboard() {
 
   const { todayEntries, currentEntry, monthlySummary, payPeriodSummary, announcements } = data || {};
 
+  const goalTarget = salesGoal?.target_count || 0;
+  const goalCurrent = salesGoal?.current_count || 0;
+  const goalPct = goalTarget > 0 ? Math.min(100, Math.round((goalCurrent / goalTarget) * 100)) : 0;
+  const goalHit = goalTarget > 0 && goalCurrent >= goalTarget;
+
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
+      {salesGoal && goalTarget > 0 && (
+        <div className={`p-6 rounded-xl border ${goalHit ? 'bg-green-900/20 border-green-700' : 'bg-gray-800 border-indigo-800/60'}`}>
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <Target className={`mt-1 ${goalHit ? 'text-green-400' : 'text-indigo-400'}`} size={22} />
+              <div>
+                <p className="text-xs uppercase tracking-wider text-gray-400">{salesGoal.label || 'Sales Goal'}</p>
+                <p className="text-3xl font-bold text-white font-mono">
+                  {goalCurrent.toLocaleString()} <span className="text-gray-400 font-normal text-xl">/ {goalTarget.toLocaleString()} PCs</span>
+                </p>
+              </div>
+            </div>
+            <div className={`text-2xl font-bold ${goalHit ? 'text-green-300' : 'text-indigo-300'}`}>
+              {goalPct}%
+            </div>
+          </div>
+          <div className="mt-4 h-3 bg-gray-900 rounded-full overflow-hidden border border-gray-700">
+            <div
+              className={`h-full transition-all ${goalHit ? 'bg-green-500' : 'bg-indigo-500'}`}
+              style={{ width: `${goalPct}%` }}
+            />
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs">
+            <span className="text-gray-500">
+              {salesGoal.last_fetched_at
+                ? `Updated ${moment(salesGoal.last_fetched_at).fromNow()}`
+                : 'Awaiting first sync'}
+            </span>
+            {goalHit && <span className="text-green-300 font-medium">Goal hit. Nice work.</span>}
+          </div>
+          {salesGoal.last_fetch_error && (
+            <p className="mt-1 text-xs text-red-300/80">Last sync failed: {salesGoal.last_fetch_error}</p>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-white">Welcome, {user?.username}</h2>
@@ -167,6 +251,74 @@ export default function Dashboard() {
           ))}
         </div>
       )}
+
+      {pendingMeeting && (() => {
+        const viewerTz = user?.timezone || detectTz();
+        const { primary: pendingPrimary, secondary: pendingSecondary } = describeMeetingTime(pendingMeeting, viewerTz);
+        return (
+        <div className="bg-gray-800 rounded-xl shadow-sm border border-purple-800/60 overflow-hidden">
+          <div className="px-6 py-3 bg-purple-900/30 border-b border-purple-800/60 flex items-center text-sm text-purple-100">
+            <Video size={16} className="mr-2 text-purple-300" />
+            RSVP for your next meeting
+          </div>
+          <div className="p-6 flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <h3 className="text-lg font-semibold text-white">{pendingMeeting.title}</h3>
+              <div className="mt-1 text-sm text-gray-300 flex flex-wrap items-center gap-2">
+                <span>{pendingPrimary}</span>
+                {pendingMeeting.recurrence && pendingMeeting.recurrence !== 'none' && (
+                  <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-indigo-900/50 text-indigo-200 border border-indigo-800">
+                    <Repeat size={12} className="mr-1" />
+                    {pendingMeeting.recurrence_label || pendingMeeting.recurrence}
+                  </span>
+                )}
+              </div>
+              {pendingSecondary && (
+                <div className="text-xs text-gray-400 mt-0.5">Your time: {pendingSecondary}</div>
+              )}
+              {pendingMeeting.description && (
+                <p className="mt-2 text-sm text-gray-400 whitespace-pre-wrap">{pendingMeeting.description}</p>
+              )}
+              <div className="mt-2 flex flex-wrap gap-3 text-sm">
+                {pendingMeeting.link && (
+                  <a href={pendingMeeting.link} target="_blank" rel="noopener noreferrer" className="inline-flex items-center text-indigo-400 hover:text-indigo-300">
+                    <ExternalLink size={14} className="mr-1" /> Join meeting
+                  </a>
+                )}
+                {pendingMeeting.location && (
+                  <span className="inline-flex items-center text-gray-400">
+                    <MapPin size={14} className="mr-1" /> {pendingMeeting.location}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => handleRsvp('accepted')}
+                disabled={rsvpSubmitting}
+                className="px-3 py-2 rounded-md text-sm font-medium border border-green-600 text-green-100 bg-green-700/30 hover:bg-green-700/50 disabled:opacity-50 inline-flex items-center"
+              >
+                <Check size={14} className="mr-1" /> Going
+              </button>
+              <button
+                onClick={() => handleRsvp('maybe')}
+                disabled={rsvpSubmitting}
+                className="px-3 py-2 rounded-md text-sm font-medium border border-yellow-600 text-yellow-100 bg-yellow-700/30 hover:bg-yellow-700/50 disabled:opacity-50 inline-flex items-center"
+              >
+                <HelpCircle size={14} className="mr-1" /> Maybe
+              </button>
+              <button
+                onClick={() => handleRsvp('declined')}
+                disabled={rsvpSubmitting}
+                className="px-3 py-2 rounded-md text-sm font-medium border border-red-600 text-red-100 bg-red-700/30 hover:bg-red-700/50 disabled:opacity-50 inline-flex items-center"
+              >
+                <XIcon size={14} className="mr-1" /> Not Going
+              </button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Clock Controls */}

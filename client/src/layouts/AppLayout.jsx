@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
-import { LayoutDashboard, Calendar, BookOpen, Users, Settings, LogOut, Menu, X, ShieldAlert, HelpCircle } from 'lucide-react';
+import { LayoutDashboard, Calendar, BookOpen, Users, Settings, LogOut, Menu, X, ShieldAlert, HelpCircle, CheckSquare } from 'lucide-react';
 import { HandbookContent } from '../components/HandbookContent';
 import CustomCheckbox from '../components/CustomCheckbox';
 
@@ -52,6 +52,7 @@ export const AppLayout = () => {
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={20} /> },
     { name: 'Calendar', path: '/calendar', icon: <Calendar size={20} /> },
+    { name: 'Tasks', path: '/tasks', icon: <CheckSquare size={20} /> },
     { name: 'Company', path: '/company', icon: <Users size={20} /> },
     { name: 'Handbook', path: '/handbook', icon: <BookOpen size={20} /> },
     { name: 'Help', path: '/help', icon: <HelpCircle size={20} /> },

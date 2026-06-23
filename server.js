@@ -94,7 +94,15 @@ const userSchema = new mongoose.Schema({
   handbook_agreed: { type: Boolean, default: false },
   handbook_version: { type: String },
   handbook_agreed_ip: { type: String },
-  handbook_agreed_date: { type: Date }
+  handbook_agreed_date: { type: Date },
+  timezone: { type: String, default: '' },
+  employment_status: {
+    type: String,
+    enum: ['active', 'inactive', 'on_leave', 'let_go'],
+    default: 'active'
+  },
+  status_changed_at: { type: Date },
+  status_note: { type: String, default: '' }
 });
 
 const timeEntrySchema = new mongoose.Schema({
@@ -135,11 +143,67 @@ const announcementSchema = new mongoose.Schema({
   updated_at: { type: Date, default: Date.now }
 });
 
+const taskSchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  due_date: { type: Date },
+  status: { type: String, enum: ['pending', 'in_progress', 'completed'], default: 'pending' },
+  is_admin_created: { type: Boolean, default: false },
+  created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  completed_at: { type: Date },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+
+const meetingSchema = new mongoose.Schema({
+  title: { type: String, required: true },
+  description: { type: String, default: '' },
+  link: { type: String, default: '' },
+  location: { type: String, default: '' },
+  start_time: { type: Date, required: true },
+  end_time: { type: Date },
+  recurrence: { type: String, enum: ['none', 'daily', 'weekly', 'biweekly', 'monthly'], default: 'none' },
+  recurrence_end_date: { type: Date },
+  organizer_timezone: { type: String, default: '' },
+  created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  attendees: [{
+    user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    status: { type: String, enum: ['pending', 'accepted', 'declined', 'maybe'], default: 'pending' },
+    responded_at: { type: Date }
+  }],
+  dismissed_alerts: [{
+    user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    occurrence_start: { type: Date, required: true },
+    dismissed_at: { type: Date, default: Date.now }
+  }],
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+
+const salesGoalSchema = new mongoose.Schema({
+  singleton: { type: String, default: 'goal', unique: true },
+  label: { type: String, default: 'Sales Goal' },
+  target_count: { type: Number, default: 0 },
+  period_kind: { type: String, enum: ['month', 'year', 'days', 'range'], default: 'month' },
+  period_days: { type: Number, default: 30 },
+  period_start: { type: Date },
+  period_end: { type: Date },
+  last_fetched_count: { type: Number, default: 0 },
+  last_fetched_at: { type: Date },
+  last_fetch_error: { type: String, default: '' },
+  updated_at: { type: Date, default: Date.now },
+  updated_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+});
+
 // Create models
 const User = mongoose.model('User', userSchema);
 const TimeEntry = mongoose.model('TimeEntry', timeEntrySchema);
 const HelpInquiry = mongoose.model('HelpInquiry', helpInquirySchema);
 const Announcement = mongoose.model('Announcement', announcementSchema);
+const Task = mongoose.model('Task', taskSchema);
+const Meeting = mongoose.model('Meeting', meetingSchema);
+const SalesGoal = mongoose.model('SalesGoal', salesGoalSchema);
 
 // Middleware
 app.use(express.json());
@@ -187,7 +251,8 @@ app.get('/api/auth/me', async (req, res) => {
           hourlyRate: req.session.hourlyRate,
           needsPasswordReset: req.session.needsPasswordReset,
           handbookAgreed: user.handbook_agreed,
-          handbookVersion: user.handbook_version
+          handbookVersion: user.handbook_version,
+          timezone: user.timezone || ''
         }
       });
     } catch (err) {
@@ -195,6 +260,25 @@ app.get('/api/auth/me', async (req, res) => {
     }
   } else {
     res.json({ success: false, user: null });
+  }
+});
+
+app.post('/api/auth/timezone', requireAuth, async (req, res) => {
+  try {
+    const { timezone } = req.body;
+    if (!timezone || typeof timezone !== 'string' || timezone.length > 64) {
+      return res.status(400).json({ success: false, error: 'Invalid timezone' });
+    }
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    } catch {
+      return res.status(400).json({ success: false, error: 'Unknown timezone identifier' });
+    }
+    await User.findByIdAndUpdate(req.session.userId, { timezone });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Update timezone error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update timezone' });
   }
 });
 
@@ -230,9 +314,23 @@ app.post('/api/auth/login', async (req, res) => {
       console.log('Invalid password for user:', username);
       return res.status(401).json({ success: false, error: 'Invalid username or password' });
     }
-    
+
     console.log('Password valid for user:', username);
-    
+
+    const status = user.employment_status || 'active';
+    if (status !== 'active') {
+      const statusMessages = {
+        inactive: 'Your account is inactive. Please contact an administrator.',
+        on_leave: 'Your account is currently on leave. Please contact an administrator.',
+        let_go: 'Your account is no longer active. Please contact an administrator.'
+      };
+      console.log(`Blocked login for ${username} (status: ${status})`);
+      return res.status(403).json({
+        success: false,
+        error: statusMessages[status] || 'Your account is not active.'
+      });
+    }
+
     // Check if user needs to reset password
     if (user.needs_password_reset) {
       console.log('User needs password reset:', username);
@@ -678,6 +776,9 @@ app.get('/api/admin', requireAdmin, async (req, res) => {
           email: 1,
           role: 1,
           hourly_rate: 1,
+          employment_status: 1,
+          status_changed_at: 1,
+          status_note: 1,
           total_entries: { $size: '$timeEntries' },
           total_hours: {
             $sum: {
@@ -927,6 +1028,34 @@ function generateTemporaryPassword() {
   return password;
 }
 
+app.post('/api/admin/update-status', requireAdmin, async (req, res) => {
+  try {
+    const { userId, status, note } = req.body;
+    const allowed = ['active', 'inactive', 'on_leave', 'let_go'];
+    if (!userId || !allowed.includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid userId or status' });
+    }
+    if (userId === String(req.session.userId)) {
+      return res.status(400).json({ success: false, error: 'You cannot change your own status' });
+    }
+    const target = await User.findById(userId);
+    if (!target) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    if (target.username === 'admin' && status !== 'active') {
+      return res.status(400).json({ success: false, error: 'Cannot deactivate the admin user' });
+    }
+    target.employment_status = status;
+    target.status_changed_at = new Date();
+    if (note !== undefined) target.status_note = note;
+    await target.save();
+    res.json({ success: true, user: { _id: target._id, employment_status: target.employment_status, status_note: target.status_note, status_changed_at: target.status_changed_at } });
+  } catch (err) {
+    console.error('Update status error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update status' });
+  }
+});
+
 app.post('/api/admin/reset-password', requireAdmin, async (req, res) => {
   try {
     const { userId } = req.body;
@@ -1091,7 +1220,9 @@ app.get('/api/admin/export', requireAdmin, async (req, res) => {
 
 app.get('/api/handbook', requireAuth, async (req, res) => {
   try {
-    const users = await User.find({}).sort({ username: 1 });
+    const users = await User.find({
+      $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }]
+    }).sort({ username: 1 });
     
     const lanforgeByLevel = {};
     const ascendanceByLevel = {};
@@ -1303,7 +1434,10 @@ app.post('/api/announcements', requireAdmin, async (req, res) => {
     // Send email to all users with an email address
     if (resend) {
       try {
-        const usersWithEmail = await User.find({ email: { $exists: true, $ne: '' } });
+        const usersWithEmail = await User.find({
+          email: { $exists: true, $ne: '' },
+          $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }]
+        });
         const emails = usersWithEmail.map(u => u.email);
         
         if (emails.length > 0) {
@@ -1397,6 +1531,703 @@ app.delete('/api/announcements/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// Sales goal: build the orders-API query for a given goal config
+function buildOrdersQuery(goal) {
+  const kind = goal.period_kind || 'month';
+  const now = new Date();
+  if (kind === 'month') {
+    return `year=${now.getUTCFullYear()}&month=${now.getUTCMonth() + 1}`;
+  }
+  if (kind === 'year') {
+    const y = now.getUTCFullYear();
+    return `start=${y}-01-01&end=${y}-12-31`;
+  }
+  if (kind === 'days') {
+    const days = Math.max(1, Math.floor(goal.period_days || 30));
+    return `days=${days}`;
+  }
+  if (kind === 'range') {
+    const fmt = (d) => new Date(d).toISOString().slice(0, 10);
+    if (!goal.period_start || !goal.period_end) return null;
+    return `start=${fmt(goal.period_start)}&end=${fmt(goal.period_end)}`;
+  }
+  return null;
+}
+
+const ordersCountCache = new Map(); // query -> { count, fetched_at }
+const ORDERS_CACHE_TTL_MS = 30 * 1000;
+
+async function fetchDeliveredCount(query) {
+  const baseUrl = process.env.LANFORGE_ORDERS_API_URL || 'http://localhost:5001';
+  const apiKey = process.env.LANFORGE_ORDERS_API_KEY;
+  if (!apiKey) throw new Error('LANFORGE_ORDERS_API_KEY is not configured');
+  if (!query) throw new Error('Missing timeframe configuration');
+
+  const cached = ordersCountCache.get(query);
+  if (cached && Date.now() - cached.fetched_at < ORDERS_CACHE_TTL_MS) {
+    return cached.count;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const url = `${baseUrl.replace(/\/+$/, '')}/api/orders/delivered-count?${query}`;
+    const r = await fetch(url, { headers: { 'X-API-Key': apiKey }, signal: controller.signal });
+    if (!r.ok) throw new Error(`Orders API returned ${r.status}`);
+    const text = await r.text();
+    const count = parseInt(String(text).trim(), 10);
+    if (!Number.isFinite(count)) throw new Error('Orders API returned non-numeric body');
+    ordersCountCache.set(query, { count, fetched_at: Date.now() });
+    return count;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Sales goal routes
+app.get('/api/sales-goal', requireAuth, async (req, res) => {
+  try {
+    const goal = await SalesGoal.findOneAndUpdate(
+      { singleton: 'goal' },
+      { $setOnInsert: { singleton: 'goal' } },
+      { new: true, upsert: true }
+    );
+
+    const query = buildOrdersQuery(goal);
+    let liveCount = goal.last_fetched_count || 0;
+    let fetchedAt = goal.last_fetched_at;
+    let fetchError = '';
+    try {
+      liveCount = await fetchDeliveredCount(query);
+      fetchedAt = new Date();
+      goal.last_fetched_count = liveCount;
+      goal.last_fetched_at = fetchedAt;
+      goal.last_fetch_error = '';
+      await goal.save();
+    } catch (fetchErr) {
+      fetchError = fetchErr.message || 'Failed to fetch orders count';
+      goal.last_fetch_error = fetchError;
+      try { await goal.save(); } catch {}
+      console.error('Sales goal fetch error:', fetchErr);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        goal: {
+          ...goal.toObject(),
+          current_count: liveCount,
+          last_fetched_count: liveCount,
+          last_fetched_at: fetchedAt,
+          last_fetch_error: fetchError
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Get sales goal error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load sales goal' });
+  }
+});
+
+app.put('/api/admin/sales-goal', requireAdmin, async (req, res) => {
+  try {
+    const { label, target_count, period_kind, period_days, period_start, period_end } = req.body;
+    const update = { updated_at: new Date(), updated_by: req.session.userId };
+    if (label !== undefined) update.label = label;
+    if (target_count !== undefined) {
+      const n = Number(target_count);
+      if (Number.isNaN(n) || n < 0) {
+        return res.status(400).json({ success: false, error: 'target_count must be a non-negative number' });
+      }
+      update.target_count = Math.floor(n);
+    }
+    if (period_kind !== undefined) {
+      if (!['month', 'year', 'days', 'range'].includes(period_kind)) {
+        return res.status(400).json({ success: false, error: 'invalid period_kind' });
+      }
+      update.period_kind = period_kind;
+    }
+    if (period_days !== undefined) {
+      const n = Number(period_days);
+      if (Number.isNaN(n) || n < 1) {
+        return res.status(400).json({ success: false, error: 'period_days must be at least 1' });
+      }
+      update.period_days = Math.floor(n);
+    }
+    if (period_start !== undefined) update.period_start = period_start ? new Date(period_start) : null;
+    if (period_end !== undefined) update.period_end = period_end ? new Date(period_end) : null;
+
+    const goal = await SalesGoal.findOneAndUpdate(
+      { singleton: 'goal' },
+      { $set: update, $setOnInsert: { singleton: 'goal' } },
+      { new: true, upsert: true }
+    );
+    // Invalidate cache so the next GET fetches fresh
+    ordersCountCache.clear();
+    res.json({ success: true, goal });
+  } catch (err) {
+    console.error('Update sales goal error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update sales goal' });
+  }
+});
+
+// Task routes
+app.get('/api/tasks', requireAuth, async (req, res) => {
+  try {
+    const tasks = await Task.find({ user_id: req.session.userId })
+      .sort({ status: 1, due_date: 1, created_at: -1 })
+      .populate('created_by', 'username');
+    res.json({ success: true, data: { tasks } });
+  } catch (err) {
+    console.error('Get tasks error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load tasks' });
+  }
+});
+
+app.post('/api/tasks', requireAuth, async (req, res) => {
+  try {
+    const { title, description, due_date } = req.body;
+    if (!title) {
+      return res.status(400).json({ success: false, error: 'Title is required' });
+    }
+    const task = new Task({
+      user_id: req.session.userId,
+      created_by: req.session.userId,
+      title,
+      description: description || '',
+      due_date: due_date ? new Date(due_date) : null,
+      is_admin_created: false
+    });
+    await task.save();
+    res.json({ success: true, task });
+  } catch (err) {
+    console.error('Create task error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create task' });
+  }
+});
+
+app.put('/api/tasks/:id', requireAuth, async (req, res) => {
+  try {
+    const task = await Task.findOne({ _id: req.params.id, user_id: req.session.userId });
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+
+    const { title, description, due_date, status } = req.body;
+    const isAdmin = req.session.role === 'admin';
+
+    // Status can always be updated by the assignee
+    if (status !== undefined) {
+      task.status = status;
+      task.completed_at = status === 'completed' ? new Date() : null;
+    }
+
+    // Title/description/due_date are locked on admin-created tasks for non-admins
+    if (!task.is_admin_created || isAdmin) {
+      if (title !== undefined) task.title = title;
+      if (description !== undefined) task.description = description;
+      if (due_date !== undefined) task.due_date = due_date ? new Date(due_date) : null;
+    }
+
+    task.updated_at = new Date();
+    await task.save();
+    res.json({ success: true, task });
+  } catch (err) {
+    console.error('Update task error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update task' });
+  }
+});
+
+app.delete('/api/tasks/:id', requireAuth, async (req, res) => {
+  try {
+    const task = await Task.findOne({ _id: req.params.id, user_id: req.session.userId });
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+    if (task.is_admin_created && req.session.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Only admins can delete admin-assigned tasks' });
+    }
+    await Task.findByIdAndDelete(task._id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete task error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete task' });
+  }
+});
+
+// Admin task routes
+app.get('/api/admin/tasks', requireAdmin, async (req, res) => {
+  try {
+    const tasks = await Task.find()
+      .sort({ created_at: -1 })
+      .populate('user_id', 'username email')
+      .populate('created_by', 'username');
+    res.json({ success: true, data: { tasks } });
+  } catch (err) {
+    console.error('Admin tasks error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load tasks' });
+  }
+});
+
+app.post('/api/admin/tasks', requireAdmin, async (req, res) => {
+  try {
+    const { title, description, due_date, user_ids, assign_to_all } = req.body;
+    if (!title) {
+      return res.status(400).json({ success: false, error: 'Title is required' });
+    }
+
+    let targetUsers = [];
+    const activeFilter = { $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }] };
+    if (assign_to_all) {
+      targetUsers = await User.find(activeFilter);
+    } else if (Array.isArray(user_ids) && user_ids.length > 0) {
+      targetUsers = await User.find({ _id: { $in: user_ids }, ...activeFilter });
+    } else {
+      return res.status(400).json({ success: false, error: 'Select at least one user or assign to all' });
+    }
+    if (targetUsers.length === 0) {
+      return res.status(400).json({ success: false, error: 'No active users to assign' });
+    }
+
+    const dueDate = due_date ? new Date(due_date) : null;
+    const docs = targetUsers.map(u => ({
+      user_id: u._id,
+      created_by: req.session.userId,
+      title,
+      description: description || '',
+      due_date: dueDate,
+      is_admin_created: true
+    }));
+
+    const created = await Task.insertMany(docs);
+
+    if (resend) {
+      const dueLine = dueDate ? `<p><strong>Due:</strong> ${moment.utc(dueDate).format('dddd, MMM D, YYYY')}</p>` : '';
+      const descriptionBlock = description
+        ? `<div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; white-space: pre-wrap;">${description}</div>`
+        : '';
+      for (const u of targetUsers) {
+        if (!u.email) continue;
+        try {
+          await resend.emails.send({
+            from: 'staff@lanforge.co',
+            to: u.email,
+            subject: `New task assigned: ${title}`,
+            html: createEmailTemplate(
+              `New Task: ${title}`,
+              `
+              <p>Hello <strong>${u.username}</strong>,</p>
+              <p>An administrator has assigned you a new task.</p>
+              ${dueLine}
+              ${descriptionBlock}
+              <p style="text-align: center; margin-top: 24px;">
+                <a href="https://employee.lanforge.co/tasks" style="background-color: #4f46e5; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">View Tasks</a>
+              </p>
+              `
+            )
+          });
+        } catch (emailErr) {
+          console.error(`Failed to send task email to ${u.email}:`, emailErr);
+        }
+      }
+    }
+
+    res.json({ success: true, count: created.length });
+  } catch (err) {
+    console.error('Admin create task error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create tasks' });
+  }
+});
+
+app.put('/api/admin/tasks/:id', requireAdmin, async (req, res) => {
+  try {
+    const { title, description, due_date, status } = req.body;
+    const update = { updated_at: new Date() };
+    if (title !== undefined) update.title = title;
+    if (description !== undefined) update.description = description;
+    if (due_date !== undefined) update.due_date = due_date ? new Date(due_date) : null;
+    if (status !== undefined) {
+      update.status = status;
+      update.completed_at = status === 'completed' ? new Date() : null;
+    }
+    const task = await Task.findByIdAndUpdate(req.params.id, update, { new: true });
+    if (!task) {
+      return res.status(404).json({ success: false, error: 'Task not found' });
+    }
+    res.json({ success: true, task });
+  } catch (err) {
+    console.error('Admin update task error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update task' });
+  }
+});
+
+app.delete('/api/admin/tasks/:id', requireAdmin, async (req, res) => {
+  try {
+    await Task.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Admin delete task error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete task' });
+  }
+});
+
+// Expand a recurring meeting into discrete occurrences within [windowStart, windowEnd]
+function expandOccurrences(meeting, windowStart, windowEnd) {
+  const start = moment(meeting.start_time);
+  const durationMs = meeting.end_time ? moment(meeting.end_time).diff(start) : 0;
+  const stepMap = {
+    daily: [1, 'day'],
+    weekly: [1, 'week'],
+    biweekly: [2, 'week'],
+    monthly: [1, 'month']
+  };
+  const occurrences = [];
+
+  if (!meeting.recurrence || meeting.recurrence === 'none') {
+    if (start.isBetween(windowStart, windowEnd, null, '[]')) {
+      occurrences.push({
+        start: start.toDate(),
+        end: durationMs ? start.clone().add(durationMs, 'ms').toDate() : null
+      });
+    }
+    return occurrences;
+  }
+
+  const step = stepMap[meeting.recurrence];
+  if (!step) return occurrences;
+
+  const seriesEnd = meeting.recurrence_end_date
+    ? moment.min(moment(meeting.recurrence_end_date), moment(windowEnd))
+    : moment(windowEnd);
+
+  let cursor = start.clone();
+  let guard = 0;
+  while (cursor.isSameOrBefore(seriesEnd) && guard < 1000) {
+    if (cursor.isSameOrAfter(windowStart)) {
+      occurrences.push({
+        start: cursor.toDate(),
+        end: durationMs ? cursor.clone().add(durationMs, 'ms').toDate() : null
+      });
+    }
+    cursor.add(step[0], step[1]);
+    guard++;
+  }
+  return occurrences;
+}
+
+const RECURRENCE_LABELS = {
+  none: 'One-time',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly'
+};
+
+// Format a Date in a given IANA timezone using Intl. Falls back to local when tz is empty.
+function formatDateInTz(date, tz, opts = {}) {
+  if (!date) return '';
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz || undefined,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+      ...opts
+    }).format(new Date(date));
+  } catch {
+    return new Date(date).toString();
+  }
+}
+
+function formatTimeOnlyInTz(date, tz) {
+  if (!date) return '';
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: tz || undefined,
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short'
+    }).format(new Date(date));
+  } catch {
+    return new Date(date).toString();
+  }
+}
+
+// Meeting routes
+app.get('/api/meetings', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const meetings = await Meeting.find({ 'attendees.user_id': userId })
+      .populate('created_by', 'username');
+
+    const windowStart = moment().subtract(30, 'days');
+    const windowEnd = moment().add(365, 'days');
+
+    const result = [];
+    meetings.forEach(m => {
+      const obj = m.toObject();
+      const mine = obj.attendees.find(a => a.user_id.toString() === userId.toString());
+      const occurrences = expandOccurrences(obj, windowStart, windowEnd);
+      occurrences.forEach(occ => {
+        const occIso = occ.start.toISOString();
+        const dismissed = (obj.dismissed_alerts || []).some(d =>
+          d.user_id.toString() === userId.toString() &&
+          new Date(d.occurrence_start).toISOString() === occIso
+        );
+        result.push({
+          _id: obj._id,
+          occurrence_id: `${obj._id}_${occIso}`,
+          occurrence_start: occ.start,
+          occurrence_end: occ.end,
+          title: obj.title,
+          description: obj.description,
+          link: obj.link,
+          location: obj.location,
+          start_time: occ.start,
+          end_time: occ.end,
+          recurrence: obj.recurrence || 'none',
+          recurrence_label: RECURRENCE_LABELS[obj.recurrence || 'none'],
+          recurrence_end_date: obj.recurrence_end_date,
+          organizer_timezone: obj.organizer_timezone || '',
+          created_by: obj.created_by,
+          my_status: mine ? mine.status : 'pending',
+          alert_dismissed: dismissed
+        });
+      });
+    });
+
+    result.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+    res.json({ success: true, data: { meetings: result } });
+  } catch (err) {
+    console.error('Get meetings error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load meetings' });
+  }
+});
+
+app.post('/api/meetings/:id/dismiss-alert', requireAuth, async (req, res) => {
+  try {
+    const { occurrence_start } = req.body;
+    if (!occurrence_start) {
+      return res.status(400).json({ success: false, error: 'occurrence_start is required' });
+    }
+    const meeting = await Meeting.findOne({
+      _id: req.params.id,
+      'attendees.user_id': req.session.userId
+    });
+    if (!meeting) {
+      return res.status(404).json({ success: false, error: 'Meeting not found' });
+    }
+    const occDate = new Date(occurrence_start);
+    const already = (meeting.dismissed_alerts || []).some(d =>
+      d.user_id.toString() === req.session.userId.toString() &&
+      new Date(d.occurrence_start).toISOString() === occDate.toISOString()
+    );
+    if (!already) {
+      meeting.dismissed_alerts.push({
+        user_id: req.session.userId,
+        occurrence_start: occDate,
+        dismissed_at: new Date()
+      });
+      await meeting.save();
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Dismiss alert error:', err);
+    res.status(500).json({ success: false, error: 'Failed to dismiss alert' });
+  }
+});
+
+app.post('/api/meetings/:id/rsvp', requireAuth, async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!['accepted', 'declined', 'maybe', 'pending'].includes(status)) {
+      return res.status(400).json({ success: false, error: 'Invalid status' });
+    }
+    const meeting = await Meeting.findOne({
+      _id: req.params.id,
+      'attendees.user_id': req.session.userId
+    });
+    if (!meeting) {
+      return res.status(404).json({ success: false, error: 'Meeting not found' });
+    }
+    const attendee = meeting.attendees.find(a => a.user_id.toString() === req.session.userId.toString());
+    attendee.status = status;
+    attendee.responded_at = new Date();
+    await meeting.save();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('RSVP error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update RSVP' });
+  }
+});
+
+// Admin meeting routes
+app.get('/api/admin/meetings', requireAdmin, async (req, res) => {
+  try {
+    const meetings = await Meeting.find()
+      .sort({ start_time: -1 })
+      .populate('attendees.user_id', 'username email')
+      .populate('created_by', 'username');
+    res.json({ success: true, data: { meetings } });
+  } catch (err) {
+    console.error('Admin meetings error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load meetings' });
+  }
+});
+
+app.post('/api/admin/meetings', requireAdmin, async (req, res) => {
+  try {
+    const { title, description, link, location, start_time, end_time, user_ids, invite_all, recurrence, recurrence_end_date } = req.body;
+    if (!title || !start_time) {
+      return res.status(400).json({ success: false, error: 'Title and start time are required' });
+    }
+
+    let attendeeUsers = [];
+    const activeFilter = { $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }] };
+    if (invite_all) {
+      attendeeUsers = await User.find(activeFilter);
+    } else if (Array.isArray(user_ids) && user_ids.length > 0) {
+      attendeeUsers = await User.find({ _id: { $in: user_ids }, ...activeFilter });
+    } else {
+      return res.status(400).json({ success: false, error: 'Select at least one attendee or invite all' });
+    }
+    if (attendeeUsers.length === 0) {
+      return res.status(400).json({ success: false, error: 'No active users to invite' });
+    }
+
+    const organizer = await User.findById(req.session.userId);
+    const organizerTz = (organizer && organizer.timezone) || '';
+
+    const meeting = new Meeting({
+      title,
+      description: description || '',
+      link: link || '',
+      location: location || '',
+      start_time: new Date(start_time),
+      end_time: end_time ? new Date(end_time) : null,
+      recurrence: recurrence || 'none',
+      recurrence_end_date: recurrence_end_date ? new Date(recurrence_end_date) : null,
+      organizer_timezone: organizerTz,
+      created_by: req.session.userId,
+      attendees: attendeeUsers.map(u => ({ user_id: u._id, status: 'pending' }))
+    });
+    await meeting.save();
+
+    if (resend) {
+      const recurrenceLabel = RECURRENCE_LABELS[meeting.recurrence] || 'One-time';
+      const recurrenceLine = meeting.recurrence !== 'none'
+        ? `<p><strong>Repeats:</strong> ${recurrenceLabel}${meeting.recurrence_end_date ? ` until ${formatDateInTz(meeting.recurrence_end_date, organizerTz, { hour: undefined, minute: undefined, timeZoneName: undefined })}` : ''}</p>`
+        : '';
+      const locationLine = meeting.location ? `<p><strong>Location:</strong> ${meeting.location}</p>` : '';
+      const descriptionBlock = meeting.description
+        ? `<div style="background-color: #f8fafc; border-left: 4px solid #4f46e5; padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0; white-space: pre-wrap;">${meeting.description}</div>`
+        : '';
+      const linkBlock = meeting.link
+        ? `<p style="text-align: center; margin: 20px 0;">
+            <a href="${meeting.link}" style="background-color: #4f46e5; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Join Meeting</a>
+          </p>`
+        : '';
+
+      for (const u of attendeeUsers) {
+        if (!u.email) continue;
+        const recipientTz = u.timezone || organizerTz;
+        const recipientStart = formatDateInTz(meeting.start_time, recipientTz);
+        const recipientEnd = meeting.end_time ? formatTimeOnlyInTz(meeting.end_time, recipientTz) : '';
+        let whenLine = `<strong>When:</strong> ${recipientStart}${recipientEnd ? ` – ${recipientEnd}` : ''}`;
+        if (organizerTz && recipientTz && organizerTz !== recipientTz) {
+          const organizerStart = formatDateInTz(meeting.start_time, organizerTz);
+          whenLine += `<br><span style="color:#6b7280;font-size:13px;">Organizer time: ${organizerStart}</span>`;
+        }
+
+        try {
+          await resend.emails.send({
+            from: 'staff@lanforge.co',
+            to: u.email,
+            subject: `Meeting invite: ${meeting.title}`,
+            html: createEmailTemplate(
+              `Meeting Invite: ${meeting.title}`,
+              `
+              <p>Hello <strong>${u.username}</strong>,</p>
+              <p>You have a new meeting on your calendar.</p>
+              <p>${whenLine}</p>
+              ${recurrenceLine}
+              ${locationLine}
+              ${descriptionBlock}
+              ${linkBlock}
+              <p style="font-size: 13px; color: #6b7280; text-align: center; margin-top: 16px;">RSVP and view details in your dashboard.</p>
+              `
+            )
+          });
+        } catch (emailErr) {
+          console.error(`Failed to send meeting invite to ${u.email}:`, emailErr);
+        }
+      }
+    }
+
+    res.json({ success: true, meeting });
+  } catch (err) {
+    console.error('Create meeting error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create meeting' });
+  }
+});
+
+app.put('/api/admin/meetings/:id', requireAdmin, async (req, res) => {
+  try {
+    const { title, description, link, location, start_time, end_time, user_ids, invite_all, recurrence, recurrence_end_date } = req.body;
+    const meeting = await Meeting.findById(req.params.id);
+    if (!meeting) {
+      return res.status(404).json({ success: false, error: 'Meeting not found' });
+    }
+
+    if (title !== undefined) meeting.title = title;
+    if (description !== undefined) meeting.description = description;
+    if (link !== undefined) meeting.link = link;
+    if (location !== undefined) meeting.location = location;
+    if (start_time !== undefined) meeting.start_time = new Date(start_time);
+    if (end_time !== undefined) meeting.end_time = end_time ? new Date(end_time) : null;
+    if (recurrence !== undefined) meeting.recurrence = recurrence || 'none';
+    if (recurrence_end_date !== undefined) meeting.recurrence_end_date = recurrence_end_date ? new Date(recurrence_end_date) : null;
+
+    if (invite_all || (Array.isArray(user_ids) && user_ids.length > 0)) {
+      let newIds;
+      const activeFilter = { $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }] };
+      if (invite_all) {
+        const users = await User.find(activeFilter, '_id');
+        newIds = users.map(u => u._id.toString());
+      } else {
+        const users = await User.find({ _id: { $in: user_ids }, ...activeFilter }, '_id');
+        newIds = users.map(u => u._id.toString());
+      }
+      const existingMap = new Map(meeting.attendees.map(a => [a.user_id.toString(), a]));
+      meeting.attendees = newIds.map(uid => {
+        const existing = existingMap.get(uid);
+        return existing || { user_id: uid, status: 'pending' };
+      });
+    }
+
+    meeting.updated_at = new Date();
+    await meeting.save();
+    res.json({ success: true, meeting });
+  } catch (err) {
+    console.error('Update meeting error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update meeting' });
+  }
+});
+
+app.delete('/api/admin/meetings/:id', requireAdmin, async (req, res) => {
+  try {
+    await Meeting.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete meeting error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete meeting' });
+  }
+});
+
 app.get('/logout', (req, res) => {
   req.session.destroy();
   res.redirect('/login');
@@ -1431,8 +2262,11 @@ cron.schedule('1 0 1,16 * *', async () => {
     
     console.log(`Running pay period summary cron job for period: ${periodName}`);
     
-    const usersWithEmail = await User.find({ email: { $exists: true, $ne: '' } });
-    
+    const usersWithEmail = await User.find({
+      email: { $exists: true, $ne: '' },
+      $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }]
+    });
+
     for (const user of usersWithEmail) {
       const payPeriodEntries = await TimeEntry.find({
         user_id: user._id,

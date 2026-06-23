@@ -1,17 +1,30 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
-import { Users, Megaphone, HelpCircle, UserPlus, Plus, Settings, AlertCircle, Edit, Trash2, Key } from 'lucide-react';
+import { Users, Megaphone, HelpCircle, UserPlus, Plus, Settings, AlertCircle, Edit, Trash2, Key, CheckSquare, Video, UserX, Target } from 'lucide-react';
 import moment from 'moment';
 import CustomModal from '../components/CustomModal';
 import CustomSelect from '../components/CustomSelect';
 import CustomCheckbox from '../components/CustomCheckbox';
+import AdminTasks from '../components/AdminTasks';
+import AdminMeetings from '../components/AdminMeetings';
 
 export default function AdminPanel() {
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [inquiries, setInquiries] = useState([]);
+  const [salesGoal, setSalesGoal] = useState(null);
+  const [salesGoalForm, setSalesGoalForm] = useState({
+    label: '',
+    target_count: 0,
+    period_kind: 'month',
+    period_days: 30,
+    period_start: '',
+    period_end: ''
+  });
+  const [salesGoalSaving, setSalesGoalSaving] = useState(false);
+  const [salesGoalSaved, setSalesGoalSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -35,6 +48,27 @@ export default function AdminPanel() {
   const [modalConfig, setModalConfig] = useState({ isOpen: false, title: '', message: '', type: 'confirm', onConfirm: null, onCancel: null, confirmText: 'Confirm' });
 
   const closeModal = () => setModalConfig({ ...modalConfig, isOpen: false });
+
+  const STATUS_OPTIONS = [
+    { value: 'active', label: 'Active' },
+    { value: 'inactive', label: 'Inactive' },
+    { value: 'on_leave', label: 'On leave' },
+    { value: 'let_go', label: 'Let go' }
+  ];
+  const STATUS_LABELS = {
+    active: 'Active',
+    inactive: 'Inactive',
+    on_leave: 'On leave',
+    let_go: 'Let go'
+  };
+  const STATUS_BADGE = {
+    active: 'bg-green-900/50 text-green-200 border-green-800',
+    inactive: 'bg-gray-700 text-gray-200 border-gray-600',
+    on_leave: 'bg-yellow-900/40 text-yellow-200 border-yellow-800',
+    let_go: 'bg-red-900/40 text-red-200 border-red-800'
+  };
+
+  const activeUsers = users.filter(u => (u.employment_status || 'active') === 'active');
 
   const fetchUsers = async () => {
     try {
@@ -69,10 +103,60 @@ export default function AdminPanel() {
     }
   };
 
+  const fetchSalesGoal = async () => {
+    try {
+      const res = await axios.get('/api/sales-goal');
+      if (res.data.success) {
+        const g = res.data.data.goal || {};
+        setSalesGoal(g);
+        setSalesGoalForm({
+          label: g.label || 'Sales Goal',
+          target_count: g.target_count || 0,
+          period_kind: g.period_kind || 'month',
+          period_days: g.period_days || 30,
+          period_start: g.period_start ? moment.utc(g.period_start).format('YYYY-MM-DD') : '',
+          period_end: g.period_end ? moment.utc(g.period_end).format('YYYY-MM-DD') : ''
+        });
+      }
+    } catch (err) {
+      setError('Failed to load sales goal');
+    }
+  };
+
+  const handleSaveSalesGoal = async (e) => {
+    e.preventDefault();
+    if (salesGoalForm.period_kind === 'range' && (!salesGoalForm.period_start || !salesGoalForm.period_end)) {
+      setError('Pick both a start and end date for the custom range.');
+      return;
+    }
+    setSalesGoalSaving(true);
+    setSalesGoalSaved(false);
+    try {
+      const payload = {
+        label: salesGoalForm.label,
+        target_count: salesGoalForm.target_count,
+        period_kind: salesGoalForm.period_kind,
+        period_days: salesGoalForm.period_days,
+        period_start: salesGoalForm.period_kind === 'range' ? salesGoalForm.period_start : '',
+        period_end: salesGoalForm.period_kind === 'range' ? salesGoalForm.period_end : ''
+      };
+      const res = await axios.put('/api/admin/sales-goal', payload);
+      if (res.data.success) {
+        setSalesGoalSaved(true);
+        setTimeout(() => setSalesGoalSaved(false), 2500);
+        await fetchSalesGoal();
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to save sales goal');
+    } finally {
+      setSalesGoalSaving(false);
+    }
+  };
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchUsers(), fetchAnnouncements(), fetchInquiries()]);
+      await Promise.all([fetchUsers(), fetchAnnouncements(), fetchInquiries(), fetchSalesGoal()]);
       setLoading(false);
     };
     loadData();
@@ -109,6 +193,37 @@ export default function AdminPanel() {
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create user');
     }
+  };
+
+  const performStatusUpdate = async (userId, status) => {
+    try {
+      const res = await axios.post('/api/admin/update-status', { userId, status });
+      if (res.data.success) {
+        fetchUsers();
+      }
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update status');
+    }
+  };
+
+  const handleStatusChange = (user, nextStatus) => {
+    if ((user.employment_status || 'active') === nextStatus) return;
+    if (nextStatus === 'active') {
+      performStatusUpdate(user._id, nextStatus);
+      return;
+    }
+    setModalConfig({
+      isOpen: true,
+      title: 'Change employment status',
+      message: `Set ${user.username} as "${STATUS_LABELS[nextStatus]}"?\n\nThey will be blocked from logging in and removed from future task/meeting assignments. Their history is preserved.`,
+      type: 'confirm',
+      confirmText: 'Apply',
+      onCancel: closeModal,
+      onConfirm: async () => {
+        closeModal();
+        performStatusUpdate(user._id, nextStatus);
+      }
+    });
   };
 
   const handleDeleteUser = (userId) => {
@@ -289,6 +404,33 @@ export default function AdminPanel() {
             <HelpCircle className="mr-2" size={18} />
             Help Inquiries
           </button>
+          <button
+            onClick={() => setActiveTab('tasks')}
+            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'tasks' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
+            }`}
+          >
+            <CheckSquare className="mr-2" size={18} />
+            Tasks
+          </button>
+          <button
+            onClick={() => setActiveTab('meetings')}
+            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'meetings' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
+            }`}
+          >
+            <Video className="mr-2" size={18} />
+            Meetings
+          </button>
+          <button
+            onClick={() => setActiveTab('sales-goal')}
+            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'sales-goal' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
+            }`}
+          >
+            <Target className="mr-2" size={18} />
+            Sales Goal
+          </button>
         </div>
 
         <div className="p-6">
@@ -393,6 +535,7 @@ export default function AdminPanel() {
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">User</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Role</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Status</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Total Hours</th>
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Actions</th>
                     </tr>
@@ -417,6 +560,22 @@ export default function AdminPanel() {
                           }`}>
                             {u.role}
                           </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {u.username === 'admin' ? (
+                            <span className={`inline-flex items-center text-xs px-2 py-1 rounded-full border ${STATUS_BADGE.active}`}>
+                              Active
+                            </span>
+                          ) : (
+                            <div className="w-32">
+                              <CustomSelect
+                                name={`status_${u._id}`}
+                                value={u.employment_status || 'active'}
+                                onChange={(e) => handleStatusChange(u, e.target.value)}
+                                options={STATUS_OPTIONS}
+                              />
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
                           {u.total_hours?.toFixed(2) || '0.00'} hrs ({u.total_entries || 0} entries)
@@ -537,6 +696,128 @@ export default function AdminPanel() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {activeTab === 'tasks' && (
+            <AdminTasks users={activeUsers} onError={setError} />
+          )}
+
+          {activeTab === 'meetings' && (
+            <AdminMeetings users={activeUsers} onError={setError} />
+          )}
+
+          {activeTab === 'sales-goal' && (
+            <div className="space-y-6 max-w-xl">
+              <div>
+                <h3 className="text-lg font-semibold text-white">Sales Goal</h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  Shown at the top of every employee's dashboard. The current count is fetched live from the orders API (delivered PCs in the selected period).
+                </p>
+              </div>
+
+              {salesGoal && salesGoal.target_count > 0 && (
+                <div className="p-4 rounded-lg border border-gray-700 bg-gray-900">
+                  <p className="text-xs uppercase tracking-wider text-gray-400">{salesGoal.label || 'Sales Goal'}</p>
+                  <p className="mt-1 text-2xl font-bold text-white font-mono">
+                    {(salesGoal.last_fetched_count || 0).toLocaleString()} / {salesGoal.target_count.toLocaleString()} PCs
+                    <span className="ml-3 text-base text-indigo-300 font-normal">
+                      ({Math.min(100, Math.round(((salesGoal.last_fetched_count || 0) / salesGoal.target_count) * 100))}%)
+                    </span>
+                  </p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {salesGoal.last_fetched_at
+                      ? `Last synced ${moment(salesGoal.last_fetched_at).fromNow()}`
+                      : 'Not yet synced'}
+                  </p>
+                  {salesGoal.last_fetch_error && (
+                    <p className="mt-1 text-xs text-red-400">Last sync failed: {salesGoal.last_fetch_error}</p>
+                  )}
+                </div>
+              )}
+
+              <form onSubmit={handleSaveSalesGoal} className="bg-gray-900 p-4 rounded-lg border border-gray-700 grid grid-cols-1 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-200">Label</label>
+                  <input
+                    type="text"
+                    value={salesGoalForm.label}
+                    onChange={e => setSalesGoalForm({ ...salesGoalForm, label: e.target.value })}
+                    placeholder="e.g. June PC Sales Goal"
+                    className="mt-1 block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-200">Target (PCs)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={salesGoalForm.target_count}
+                    onChange={e => setSalesGoalForm({ ...salesGoalForm, target_count: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
+                    className="mt-1 block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-200 mb-1">Timeframe (counts delivered PCs in this range)</label>
+                  <CustomSelect
+                    name="period_kind"
+                    value={salesGoalForm.period_kind}
+                    onChange={e => setSalesGoalForm({ ...salesGoalForm, period_kind: e.target.value })}
+                    options={[
+                      { value: 'month', label: 'Current month' },
+                      { value: 'year', label: 'Current year' },
+                      { value: 'days', label: 'Last N days' },
+                      { value: 'range', label: 'Custom date range' }
+                    ]}
+                  />
+                </div>
+                {salesGoalForm.period_kind === 'days' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-200">Days back</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={salesGoalForm.period_days}
+                      onChange={e => setSalesGoalForm({ ...salesGoalForm, period_days: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
+                      className="mt-1 block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                    />
+                  </div>
+                )}
+                {salesGoalForm.period_kind === 'range' && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200">Start (UTC)</label>
+                      <input
+                        type="date"
+                        value={salesGoalForm.period_start}
+                        onChange={e => setSalesGoalForm({ ...salesGoalForm, period_start: e.target.value })}
+                        className="mt-1 block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200">End (UTC)</label>
+                      <input
+                        type="date"
+                        value={salesGoalForm.period_end}
+                        onChange={e => setSalesGoalForm({ ...salesGoalForm, period_end: e.target.value })}
+                        className="mt-1 block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-end gap-3">
+                  {salesGoalSaved && <span className="text-sm text-green-400">Saved</span>}
+                  <button
+                    type="submit"
+                    disabled={salesGoalSaving}
+                    className="px-4 py-2 bg-indigo-600 text-sm rounded-md text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {salesGoalSaving ? 'Saving…' : 'Save Goal'}
+                  </button>
+                </div>
+              </form>
             </div>
           )}
 
