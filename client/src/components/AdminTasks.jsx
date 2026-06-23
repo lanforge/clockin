@@ -258,8 +258,8 @@ export default function AdminTasks({ users, onError }) {
                   </div>
                   {task.description && <p className="mt-2 text-sm text-gray-400 whitespace-pre-wrap">{task.description}</p>}
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-36">
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="w-36 hidden md:block">
                     <CustomSelect
                       name="status"
                       value={task.status}
@@ -270,6 +270,15 @@ export default function AdminTasks({ users, onError }) {
                   <button onClick={() => handleEdit(task)} className="p-2 text-indigo-400 hover:text-indigo-300"><Edit size={16} /></button>
                   <button onClick={() => handleDelete(task)} className="p-2 text-red-400 hover:text-red-300"><Trash2 size={16} /></button>
                 </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-gray-700 md:hidden">
+                <label className="block text-xs text-gray-400 mb-1">Status</label>
+                <CustomSelect
+                  name="status"
+                  value={task.status}
+                  onChange={(e) => handleStatusChange(task, e.target.value)}
+                  options={STATUS_OPTIONS}
+                />
               </div>
             </div>
           ))}

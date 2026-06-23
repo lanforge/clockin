@@ -52,9 +52,9 @@ export default function Company() {
               <div className="h-px bg-gray-600 flex-1"></div>
             </div>
             
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
               {hierarchyData[level].map(person => (
-                <div key={person._id} className="bg-gray-800 rounded-xl shadow-sm border border-gray-700 p-5 hover:shadow-md transition-shadow relative overflow-hidden group">
+                <div key={person._id} className="bg-gray-800 rounded-xl shadow-sm border border-gray-700 p-4 sm:p-5 hover:shadow-md transition-shadow relative overflow-hidden group">
                   <div 
                     className="absolute top-0 left-0 w-1.5 h-full"
                     style={{ backgroundColor: person.color || '#4f46e5' }}
@@ -76,12 +76,12 @@ export default function Company() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
-      <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+      <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
         <div className="flex items-center space-x-3 mb-2">
-          <BookOpen className="text-indigo-500" size={28} />
-          <h2 className="text-2xl font-bold text-white">Company</h2>
+          <BookOpen className="text-indigo-500 flex-shrink-0" size={28} />
+          <h2 className="text-xl sm:text-2xl font-bold text-white">Company</h2>
         </div>
-        <p className="text-gray-400">Company hierarchy and role structures</p>
+        <p className="text-sm text-gray-400">Company hierarchy and role structures</p>
       </div>
 
       {error && (
@@ -115,7 +115,7 @@ export default function Company() {
           </button>
         </div>
         
-        <div className="p-6 md:p-8 bg-gray-900/50">
+        <div className="p-4 sm:p-6 md:p-8 bg-gray-900/50">
           {activeTab === 'LANForge' ? renderHierarchy(lanforgeHierarchy) : renderHierarchy(ascendanceHierarchy)}
         </div>
       </div>

@@ -107,7 +107,7 @@ export default function Calendar() {
     
     const blanks = [];
     for (let i = 0; i < firstDayOfMonth; i++) {
-      blanks.push(<div key={`blank-${i}`} className="h-24 bg-gray-900 border border-gray-700 rounded-lg"></div>);
+      blanks.push(<div key={`blank-${i}`} className="h-16 sm:h-24 bg-gray-900 border border-gray-700 rounded-md sm:rounded-lg"></div>);
     }
 
     const daysInMonthArray = [];
@@ -135,29 +135,40 @@ export default function Calendar() {
       daysInMonthArray.push(
         <div
           key={d}
-          className={`h-24 border rounded-lg p-2 flex flex-col ${isToday ? 'border-indigo-400 bg-indigo-900/50/30' : 'border-gray-600 bg-gray-800'}`}
+          className={`h-16 sm:h-24 border rounded-md sm:rounded-lg p-1 sm:p-2 flex flex-col ${isToday ? 'border-indigo-400 bg-indigo-900/50/30' : 'border-gray-600 bg-gray-800'}`}
         >
-          <div className="flex justify-between items-start">
-            <span className={`text-sm font-semibold ${isToday ? 'text-indigo-600' : 'text-gray-200'}`}>{d}</span>
+          <div className="flex justify-between items-start gap-1">
+            <span className={`text-xs sm:text-sm font-semibold ${isToday ? 'text-indigo-600' : 'text-gray-200'}`}>{d}</span>
             {totalHours > 0 && (
-              <span className="text-xs font-medium text-green-600 bg-green-900/50 px-1.5 py-0.5 rounded">
+              <span className="text-[10px] sm:text-xs font-medium text-green-600 bg-green-900/50 px-1 sm:px-1.5 py-0.5 rounded">
                 {totalHours.toFixed(1)}h
               </span>
             )}
           </div>
 
-          <div className="flex-1 mt-1 overflow-y-auto no-scrollbar space-y-1">
-            {dayMeetings.map(m => (
-              <div key={m.occurrence_id || m._id} className="text-[10px] leading-tight p-1 bg-purple-900/40 rounded text-purple-100 truncate border border-purple-800/60 flex items-center" title={m.title}>
-                <Video size={10} className="mr-1 flex-shrink-0" />
-                <span className="truncate">{moment(m.start_time).format('HH:mm')} {m.title}</span>
-              </div>
-            ))}
-            {dayData && dayData.map((entry, idx) => (
-              <div key={idx} className="text-[10px] leading-tight p-1 bg-gray-900 rounded text-gray-300 truncate border border-gray-700">
-                {moment(entry.clock_in).format('HH:mm')} - {entry.clock_out ? moment(entry.clock_out).format('HH:mm') : 'Active'}
-              </div>
-            ))}
+          <div className="flex-1 mt-1 overflow-hidden sm:overflow-y-auto no-scrollbar space-y-1">
+            {/* Compact dot row on mobile, detailed cards on desktop */}
+            <div className="sm:hidden flex flex-wrap gap-0.5 mt-0.5">
+              {dayMeetings.slice(0, 3).map(m => (
+                <span key={m.occurrence_id || m._id} className="w-1.5 h-1.5 rounded-full bg-purple-400" title={m.title}></span>
+              ))}
+              {dayData && dayData.slice(0, 3).map((entry, idx) => (
+                <span key={idx} className="w-1.5 h-1.5 rounded-full bg-gray-400" title={`${moment(entry.clock_in).format('HH:mm')}${entry.clock_out ? ` - ${moment(entry.clock_out).format('HH:mm')}` : ''}`}></span>
+              ))}
+            </div>
+            <div className="hidden sm:block space-y-1">
+              {dayMeetings.map(m => (
+                <div key={m.occurrence_id || m._id} className="text-[10px] leading-tight p-1 bg-purple-900/40 rounded text-purple-100 truncate border border-purple-800/60 flex items-center" title={m.title}>
+                  <Video size={10} className="mr-1 flex-shrink-0" />
+                  <span className="truncate">{moment(m.start_time).format('HH:mm')} {m.title}</span>
+                </div>
+              ))}
+              {dayData && dayData.map((entry, idx) => (
+                <div key={idx} className="text-[10px] leading-tight p-1 bg-gray-900 rounded text-gray-300 truncate border border-gray-700">
+                  {moment(entry.clock_in).format('HH:mm')} - {entry.clock_out ? moment(entry.clock_out).format('HH:mm') : 'Active'}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       );
@@ -170,25 +181,27 @@ export default function Calendar() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700 gap-3 sm:gap-0">
         <div>
-          <h2 className="text-2xl font-bold text-white">Work Calendar</h2>
-          <p className="text-sm text-gray-400 mt-1">View your time entries and daily hours</p>
+          <h2 className="text-xl sm:text-2xl font-bold text-white">Work Calendar</h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">View your time entries and daily hours</p>
         </div>
-        
-        <div className="mt-4 sm:mt-0 flex items-center space-x-4">
-          <button 
+
+        <div className="flex items-center justify-center sm:justify-end space-x-2 sm:space-x-4">
+          <button
             onClick={prevMonth}
             className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors"
+            aria-label="Previous month"
           >
             <ChevronLeft size={20} />
           </button>
-          <span className="text-lg font-semibold text-gray-100 min-w-[140px] text-center">
+          <span className="text-base sm:text-lg font-semibold text-gray-100 min-w-[120px] sm:min-w-[140px] text-center">
             {currentDate.format('MMMM YYYY')}
           </span>
-          <button 
+          <button
             onClick={nextMonth}
             className="p-2 rounded-full hover:bg-gray-700 text-gray-300 transition-colors"
+            aria-label="Next month"
           >
             <ChevronRight size={20} />
           </button>
@@ -239,30 +252,29 @@ export default function Calendar() {
         </div>
       )}
 
-      <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700 overflow-x-auto">
-        <div className="min-w-[600px]">
-          <div className="grid grid-cols-7 gap-2 mb-4">
-            {weekdays.map(day => (
-              <div key={day} className="text-center font-medium text-sm text-gray-400 py-2">
-                {day}
-              </div>
-            ))}
-          </div>
-          
-          {loading ? (
-            <div className="flex justify-center items-center h-64">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+      <div className="bg-gray-800 p-3 sm:p-6 rounded-xl shadow-sm border border-gray-700">
+        <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2 sm:mb-4">
+          {weekdays.map(day => (
+            <div key={day} className="text-center font-medium text-[10px] sm:text-sm text-gray-400 py-1 sm:py-2">
+              <span className="sm:hidden">{day.charAt(0)}</span>
+              <span className="hidden sm:inline">{day}</span>
             </div>
-          ) : (
-            <div className="grid grid-cols-7 gap-2">
-              {getDaysInMonth()}
-            </div>
-          )}
+          ))}
         </div>
+
+        {loading ? (
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-7 gap-1 sm:gap-2">
+            {getDaysInMonth()}
+          </div>
+        )}
       </div>
 
       {upcomingMeetings.length > 0 && (
-        <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+        <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
           <h3 className="text-lg font-semibold mb-4 text-white flex items-center">
             <Video className="mr-2 text-purple-400" size={20} />
             Upcoming Meetings
@@ -344,27 +356,27 @@ export default function Calendar() {
       )}
 
       {!loading && data?.calendarData && data.calendarData.length > 0 && (
-        <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700 mt-6">
+        <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700 mt-6">
           <h3 className="text-lg font-semibold mb-4 text-white">Monthly Details</h3>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto -mx-4 sm:mx-0">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-900">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Total Hours</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Entries</th>
+                  <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Date</th>
+                  <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Hours</th>
+                  <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">Entries</th>
                 </tr>
               </thead>
               <tbody className="bg-gray-800 divide-y divide-gray-200">
                 {data.calendarData.map(day => (
                   <tr key={day.date}>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-white">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm font-medium text-white">
                       {moment(day.date).format('MMM Do, YYYY')}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm text-gray-400">
                       {day.hours.toFixed(2)}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-400">
+                    <td className="px-3 sm:px-6 py-3 sm:py-4 whitespace-nowrap text-sm text-gray-400">
                       {day.entries}
                     </td>
                   </tr>

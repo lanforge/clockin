@@ -93,7 +93,7 @@ export function HelpAndReporting() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-gray-800 rounded-xl shadow-sm border border-gray-700 p-6">
+      <div className="bg-gray-800 rounded-xl shadow-sm border border-gray-700 p-4 sm:p-6">
         {submitStatus === 'success' ? (
           <div className="bg-green-900/30 border border-green-800 rounded-lg p-6 text-center space-y-4">
             <div className="flex justify-center">

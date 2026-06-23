@@ -173,7 +173,7 @@ export default function Tasks() {
             </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-shrink-0">
             <div className="w-32 hidden sm:block">
               <CustomSelect
                 name="status"
@@ -194,6 +194,16 @@ export default function Tasks() {
             )}
           </div>
         </div>
+
+        <div className="mt-3 pt-3 border-t border-gray-700 sm:hidden">
+          <label className="block text-xs text-gray-400 mb-1">Status</label>
+          <CustomSelect
+            name="status"
+            value={task.status}
+            onChange={(e) => handleStatusChange(task, e.target.value)}
+            options={STATUS_OPTIONS}
+          />
+        </div>
       </div>
     );
   };
@@ -202,10 +212,10 @@ export default function Tasks() {
     <div className="max-w-5xl mx-auto space-y-6">
       <CustomModal {...modalConfig} />
 
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
         <div>
-          <h2 className="text-2xl font-bold text-white">Tasks</h2>
-          <p className="text-sm text-gray-400 mt-1">Track your work and follow admin-assigned items</p>
+          <h2 className="text-xl sm:text-2xl font-bold text-white">Tasks</h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">Track your work and follow admin-assigned items</p>
         </div>
         <button
           onClick={() => {

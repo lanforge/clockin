@@ -139,9 +139,9 @@ export default function AdminUser() {
 
       {error && <div className="p-4 bg-red-900/50 text-red-300 rounded-lg">{error}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="md:col-span-1 space-y-6">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+        <div className="md:col-span-1 space-y-4 sm:space-y-6">
+          <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-white">Profile</h3>
               {!isEditing ? (
@@ -262,7 +262,7 @@ export default function AdminUser() {
             )}
           </div>
 
-          <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+          <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-4 flex items-center"><Clock size={18} className="mr-2 text-indigo-500"/> Add Time</h3>
             <form onSubmit={handleAddTime} className="space-y-4">
               <div>
@@ -290,24 +290,24 @@ export default function AdminUser() {
           </div>
         </div>
 
-        <div className="md:col-span-2 space-y-6">
-          <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+        <div className="md:col-span-2 space-y-4 sm:space-y-6">
+          <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-4">Pay Periods (This Year)</h3>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto -mx-4 sm:mx-0">
               <table className="min-w-full divide-y divide-gray-200 mb-2">
                 <thead className="bg-gray-900">
                   <tr>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Period</th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Hours</th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Gross Pay</th>
+                    <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Period</th>
+                    <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Hours</th>
+                    <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Gross Pay</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
                   {yearPayPeriods.map(period => (
                     <tr key={period.sortKey}>
-                      <td className="px-4 py-3 text-sm text-white">{period.name}</td>
-                      <td className="px-4 py-3 text-sm font-medium text-white">{period.hours.toFixed(2)}h</td>
-                      <td className="px-4 py-3 text-sm font-medium text-green-400">${period.pay.toFixed(2)}</td>
+                      <td className="px-3 sm:px-4 py-3 text-sm text-white">{period.name}</td>
+                      <td className="px-3 sm:px-4 py-3 text-sm font-medium text-white">{period.hours.toFixed(2)}h</td>
+                      <td className="px-3 sm:px-4 py-3 text-sm font-medium text-green-400">${period.pay.toFixed(2)}</td>
                     </tr>
                   ))}
                   {yearPayPeriods.length === 0 && (
@@ -320,16 +320,16 @@ export default function AdminUser() {
             </div>
           </div>
 
-          <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700">
+          <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-4">Recent Time Entries</h3>
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto -mx-4 sm:mx-0">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-900">
                   <tr>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Date</th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">In/Out</th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Duration</th>
-                    <th className="px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase">Actions</th>
+                    <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Date</th>
+                    <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">In/Out</th>
+                    <th className="px-3 sm:px-4 py-2 text-left text-xs font-medium text-gray-400 uppercase">Hrs</th>
+                    <th className="px-3 sm:px-4 py-2 text-right text-xs font-medium text-gray-400 uppercase"></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -337,13 +337,13 @@ export default function AdminUser() {
                     const duration = entry.clock_out ? ((new Date(entry.clock_out) - new Date(entry.clock_in)) / (1000 * 60 * 60)).toFixed(2) : '--';
                     return (
                       <tr key={entry._id}>
-                        <td className="px-4 py-3 text-sm text-white">{moment(entry.clock_in).format('MMM Do YYYY')}</td>
-                        <td className="px-4 py-3 text-sm text-gray-400">
+                        <td className="px-3 sm:px-4 py-3 text-sm text-white whitespace-nowrap">{moment(entry.clock_in).format('MMM Do YYYY')}</td>
+                        <td className="px-3 sm:px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
                           {moment(entry.clock_in).format('HH:mm')} - {entry.clock_out ? moment(entry.clock_out).format('HH:mm') : 'Active'}
                         </td>
-                        <td className="px-4 py-3 text-sm font-medium text-white">{duration}h</td>
-                        <td className="px-4 py-3 text-right">
-                          <button onClick={() => handleRemoveTime(entry._id)} className="text-red-500 hover:text-red-200"><Trash2 size={16} /></button>
+                        <td className="px-3 sm:px-4 py-3 text-sm font-medium text-white whitespace-nowrap">{duration}h</td>
+                        <td className="px-3 sm:px-4 py-3 text-right">
+                          <button onClick={() => handleRemoveTime(entry._id)} className="text-red-500 hover:text-red-200" aria-label="Remove entry"><Trash2 size={16} /></button>
                         </td>
                       </tr>
                     );

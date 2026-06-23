@@ -138,7 +138,7 @@ export const AppLayout = () => {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-h-screen min-w-0">
-        <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-x-hidden">
+        <main className="flex-1 p-3 sm:p-4 md:p-6 lg:p-8 overflow-x-hidden">
           <Outlet />
         </main>
       </div>
@@ -153,22 +153,22 @@ export const AppLayout = () => {
 
       {/* Handbook Agreement Modal */}
       {showHandbookModal && (
-        <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-4">
-          <div className="bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col border border-gray-700">
-            <div className="p-6 border-b border-gray-700 flex justify-between items-center bg-gray-800 rounded-t-xl">
-              <h2 className="text-xl font-bold text-white flex items-center">
-                <BookOpen className="mr-3 text-indigo-500" size={24} />
-                Workforce Handbook & Policies
+        <div className="fixed inset-0 bg-black/70 z-[100] flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-gray-800 rounded-xl shadow-2xl max-w-4xl w-full max-h-[95vh] sm:max-h-[90vh] flex flex-col border border-gray-700">
+            <div className="p-4 sm:p-6 border-b border-gray-700 flex justify-between items-center bg-gray-800 rounded-t-xl">
+              <h2 className="text-base sm:text-xl font-bold text-white flex items-center min-w-0">
+                <BookOpen className="mr-2 sm:mr-3 text-indigo-500 flex-shrink-0" size={20} />
+                <span className="truncate">Workforce Handbook & Policies</span>
               </h2>
             </div>
-            
-            <div className="p-6 overflow-y-auto flex-1 bg-gray-900">
-              <div className="bg-gray-800 p-6 rounded-lg border border-gray-700">
+
+            <div className="p-3 sm:p-6 overflow-y-auto flex-1 bg-gray-900">
+              <div className="bg-gray-800 p-4 sm:p-6 rounded-lg border border-gray-700">
                 <HandbookContent />
               </div>
             </div>
-            
-            <div className="p-6 border-t border-gray-700 bg-gray-800 rounded-b-xl">
+
+            <div className="p-4 sm:p-6 border-t border-gray-700 bg-gray-800 rounded-b-xl">
               <div className="mb-4">
                 <CustomCheckbox
                   id="agreedToHandbook"

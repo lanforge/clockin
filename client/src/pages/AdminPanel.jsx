@@ -17,7 +17,7 @@ export default function AdminPanel() {
   const [salesGoal, setSalesGoal] = useState(null);
   const [salesGoalForm, setSalesGoalForm] = useState({
     label: '',
-    target_count: 0,
+    tiers: [{ target_count: '', bonus: '' }],
     period_kind: 'month',
     period_days: 30,
     period_start: '',
@@ -109,9 +109,12 @@ export default function AdminPanel() {
       if (res.data.success) {
         const g = res.data.data.goal || {};
         setSalesGoal(g);
+        const tiers = Array.isArray(g.tiers) && g.tiers.length > 0
+          ? g.tiers.map(t => ({ target_count: t.target_count, bonus: t.bonus || '' }))
+          : [{ target_count: '', bonus: '' }];
         setSalesGoalForm({
           label: g.label || 'Sales Goal',
-          target_count: g.target_count || 0,
+          tiers,
           period_kind: g.period_kind || 'month',
           period_days: g.period_days || 30,
           period_start: g.period_start ? moment.utc(g.period_start).format('YYYY-MM-DD') : '',
@@ -123,10 +126,30 @@ export default function AdminPanel() {
     }
   };
 
+  const handleAddTier = () => {
+    setSalesGoalForm(f => ({ ...f, tiers: [...f.tiers, { target_count: '', bonus: '' }] }));
+  };
+  const handleRemoveTier = (idx) => {
+    setSalesGoalForm(f => ({ ...f, tiers: f.tiers.length === 1 ? f.tiers : f.tiers.filter((_, i) => i !== idx) }));
+  };
+  const handleTierChange = (idx, field, value) => {
+    setSalesGoalForm(f => ({
+      ...f,
+      tiers: f.tiers.map((t, i) => i === idx ? { ...t, [field]: value } : t)
+    }));
+  };
+
   const handleSaveSalesGoal = async (e) => {
     e.preventDefault();
     if (salesGoalForm.period_kind === 'range' && (!salesGoalForm.period_start || !salesGoalForm.period_end)) {
       setError('Pick both a start and end date for the custom range.');
+      return;
+    }
+    const cleanedTiers = salesGoalForm.tiers
+      .map(t => ({ target_count: parseInt(t.target_count, 10), bonus: t.bonus }))
+      .filter(t => Number.isFinite(t.target_count) && t.target_count > 0);
+    if (cleanedTiers.length === 0) {
+      setError('Add at least one tier with a target greater than 0.');
       return;
     }
     setSalesGoalSaving(true);
@@ -134,7 +157,7 @@ export default function AdminPanel() {
     try {
       const payload = {
         label: salesGoalForm.label,
-        target_count: salesGoalForm.target_count,
+        tiers: cleanedTiers,
         period_kind: salesGoalForm.period_kind,
         period_days: salesGoalForm.period_days,
         period_start: salesGoalForm.period_kind === 'range' ? salesGoalForm.period_start : '',
@@ -357,11 +380,11 @@ export default function AdminPanel() {
         confirmText={modalConfig.confirmText}
       />
 
-      <div className="bg-gray-800 p-6 rounded-xl shadow-sm border border-gray-700 flex items-center space-x-3">
-        <Settings className="text-indigo-600" size={28} />
-        <div>
-          <h2 className="text-2xl font-bold text-white">Admin Dashboard</h2>
-          <p className="text-gray-400 text-sm">Manage users, announcements, and inquiries</p>
+      <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700 flex items-center space-x-3">
+        <Settings className="text-indigo-600 flex-shrink-0" size={28} />
+        <div className="min-w-0">
+          <h2 className="text-xl sm:text-2xl font-bold text-white">Admin Dashboard</h2>
+          <p className="text-gray-400 text-xs sm:text-sm">Manage users, announcements, and inquiries</p>
         </div>
       </div>
 
@@ -379,7 +402,7 @@ export default function AdminPanel() {
         <div className="flex border-b border-gray-700 overflow-x-auto no-scrollbar">
           <button
             onClick={() => setActiveTab('users')}
-            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === 'users' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
@@ -388,7 +411,7 @@ export default function AdminPanel() {
           </button>
           <button
             onClick={() => setActiveTab('announcements')}
-            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === 'announcements' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
@@ -397,7 +420,7 @@ export default function AdminPanel() {
           </button>
           <button
             onClick={() => setActiveTab('inquiries')}
-            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === 'inquiries' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
@@ -406,7 +429,7 @@ export default function AdminPanel() {
           </button>
           <button
             onClick={() => setActiveTab('tasks')}
-            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === 'tasks' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
@@ -415,7 +438,7 @@ export default function AdminPanel() {
           </button>
           <button
             onClick={() => setActiveTab('meetings')}
-            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === 'meetings' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
@@ -424,7 +447,7 @@ export default function AdminPanel() {
           </button>
           <button
             onClick={() => setActiveTab('sales-goal')}
-            className={`flex items-center px-6 py-4 text-sm font-medium whitespace-nowrap transition-colors ${
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
               activeTab === 'sales-goal' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
@@ -433,7 +456,7 @@ export default function AdminPanel() {
           </button>
         </div>
 
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {activeTab === 'users' && (
             <div className="space-y-6">
               <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4">
@@ -529,7 +552,60 @@ export default function AdminPanel() {
                 </form>
               )}
 
-              <div className="overflow-x-auto ring-1 ring-gray-700 rounded-lg">
+              {/* Mobile: card view */}
+              <div className="md:hidden space-y-3">
+                {users.map(u => (
+                  <div key={u._id} className="bg-gray-900 border border-gray-700 rounded-lg p-4">
+                    <div className="flex items-start gap-3">
+                      <div className="h-10 w-10 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold flex-shrink-0">
+                        {u.username.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <Link to={`/admin/user/${u._id}`} className="text-sm font-medium text-indigo-400 hover:text-indigo-300 break-all">{u.username}</Link>
+                        <div className="text-xs text-gray-400 break-all">{u.email || 'No email'}</div>
+                        <div className="mt-2 flex items-center gap-2 flex-wrap">
+                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            u.role === 'admin' ? 'bg-purple-900/50 text-purple-200' : 'bg-green-900/50 text-green-200'
+                          }`}>
+                            {u.role}
+                          </span>
+                          <span className="text-xs text-gray-400">
+                            {u.total_hours?.toFixed(2) || '0.00'} hrs · {u.total_entries || 0} entries
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button title="Reset Password" onClick={() => handleResetPassword(u._id)} className="p-2 text-yellow-500 hover:text-yellow-300">
+                          <Key size={18} />
+                        </button>
+                        {u.username !== 'admin' && (
+                          <button title="Delete User" onClick={() => handleDeleteUser(u._id)} className="p-2 text-red-400 hover:text-red-300">
+                            <Trash2 size={18} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-gray-700">
+                      <label className="block text-xs text-gray-400 mb-1">Status</label>
+                      {u.username === 'admin' ? (
+                        <span className={`inline-flex items-center text-xs px-2 py-1 rounded-full border ${STATUS_BADGE.active}`}>
+                          Active
+                        </span>
+                      ) : (
+                        <CustomSelect
+                          name={`status_${u._id}`}
+                          value={u.employment_status || 'active'}
+                          onChange={(e) => handleStatusChange(u, e.target.value)}
+                          options={STATUS_OPTIONS}
+                        />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop: table view */}
+              <div className="hidden md:block overflow-x-auto ring-1 ring-gray-700 rounded-lg">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-900">
                     <tr>
@@ -672,14 +748,14 @@ export default function AdminPanel() {
                     ann.type === 'success' ? 'border-green-800 bg-green-900/20' :
                     'border-gray-600 bg-gray-800'
                   }`}>
-                    <div className="flex justify-between items-start">
-                      <h4 className="font-bold text-white flex items-center">
-                        {ann.title}
-                        <span className={`ml-3 px-2 py-0.5 text-xs rounded-full ${ann.is_active ? 'bg-green-900/50 text-green-200 border border-green-800' : 'bg-gray-700 text-gray-300 border border-gray-600'}`}>
+                    <div className="flex justify-between items-start gap-2">
+                      <h4 className="font-bold text-white flex items-center flex-wrap gap-2 min-w-0">
+                        <span className="break-words">{ann.title}</span>
+                        <span className={`px-2 py-0.5 text-xs rounded-full whitespace-nowrap ${ann.is_active ? 'bg-green-900/50 text-green-200 border border-green-800' : 'bg-gray-700 text-gray-300 border border-gray-600'}`}>
                           {ann.is_active ? 'Active' : 'Inactive'}
                         </span>
                       </h4>
-                      <div className="flex space-x-2">
+                      <div className="flex space-x-2 flex-shrink-0">
                         <button onClick={() => handleEditAnnouncement(ann)} className="text-indigo-400 hover:text-indigo-300 p-1">
                           <Edit size={16} />
                         </button>
@@ -716,25 +792,47 @@ export default function AdminPanel() {
                 </p>
               </div>
 
-              {salesGoal && salesGoal.target_count > 0 && (
-                <div className="p-4 rounded-lg border border-gray-700 bg-gray-900">
-                  <p className="text-xs uppercase tracking-wider text-gray-400">{salesGoal.label || 'Sales Goal'}</p>
-                  <p className="mt-1 text-2xl font-bold text-white font-mono">
-                    {(salesGoal.last_fetched_count || 0).toLocaleString()} / {salesGoal.target_count.toLocaleString()} PCs
-                    <span className="ml-3 text-base text-indigo-300 font-normal">
-                      ({Math.min(100, Math.round(((salesGoal.last_fetched_count || 0) / salesGoal.target_count) * 100))}%)
-                    </span>
-                  </p>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {salesGoal.last_fetched_at
-                      ? `Last synced ${moment(salesGoal.last_fetched_at).fromNow()}`
-                      : 'Not yet synced'}
-                  </p>
-                  {salesGoal.last_fetch_error && (
-                    <p className="mt-1 text-xs text-red-400">Last sync failed: {salesGoal.last_fetch_error}</p>
-                  )}
-                </div>
-              )}
+              {salesGoal && Array.isArray(salesGoal.tiers) && salesGoal.tiers.length > 0 && (() => {
+                const live = salesGoal.last_fetched_count || 0;
+                const nextIdx = salesGoal.tiers.findIndex(t => live < t.target_count);
+                const allHit = nextIdx === -1;
+                const active = nextIdx >= 0 ? salesGoal.tiers[nextIdx] : null;
+                return (
+                  <div className="p-4 rounded-lg border border-gray-700 bg-gray-900">
+                    <p className="text-xs uppercase tracking-wider text-gray-400">{salesGoal.label || 'Sales Goal'}</p>
+                    <p className="mt-1 text-2xl font-bold text-white font-mono">
+                      {live.toLocaleString()}{active ? ` / ${active.target_count.toLocaleString()}` : ''} PCs
+                      {allHit && <span className="ml-3 text-base text-green-300 font-normal">all tiers hit</span>}
+                    </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {salesGoal.tiers.map((t, i) => {
+                        const hit = live >= t.target_count;
+                        const isNext = i === nextIdx;
+                        return (
+                          <span
+                            key={i}
+                            className={`text-xs px-2 py-1 rounded-full border ${
+                              hit ? 'bg-green-900/30 text-green-200 border-green-800'
+                                  : isNext ? 'bg-indigo-900/30 text-indigo-200 border-indigo-700'
+                                           : 'bg-gray-800 text-gray-300 border-gray-700'
+                            }`}
+                          >
+                            {t.target_count.toLocaleString()} PCs{t.bonus ? ` · ${t.bonus}` : ''}{hit ? ' ✓' : ''}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    <p className="mt-3 text-xs text-gray-500">
+                      {salesGoal.last_fetched_at
+                        ? `Last synced ${moment(salesGoal.last_fetched_at).fromNow()}`
+                        : 'Not yet synced'}
+                    </p>
+                    {salesGoal.last_fetch_error && (
+                      <p className="mt-1 text-xs text-red-400">Last sync failed: {salesGoal.last_fetch_error}</p>
+                    )}
+                  </div>
+                );
+              })()}
 
               <form onSubmit={handleSaveSalesGoal} className="bg-gray-900 p-4 rounded-lg border border-gray-700 grid grid-cols-1 gap-4">
                 <div>
@@ -748,15 +846,44 @@ export default function AdminPanel() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-200">Target (PCs)</label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={salesGoalForm.target_count}
-                    onChange={e => setSalesGoalForm({ ...salesGoalForm, target_count: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
-                    className="mt-1 block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
-                  />
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-sm font-medium text-gray-200">Tiers</label>
+                    <button type="button" onClick={handleAddTier} className="text-xs text-indigo-400 hover:text-indigo-300 inline-flex items-center">
+                      <Plus size={14} className="mr-1" /> Add tier
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-400 mb-2">Each tier is a PC-sold threshold and the bonus that gets unlocked when it's hit. Lowest tier comes first.</p>
+                  <div className="space-y-2">
+                    {salesGoalForm.tiers.map((t, idx) => (
+                      <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1fr_2fr_auto] gap-2 items-start">
+                        <input
+                          type="number"
+                          min="1"
+                          step="1"
+                          placeholder="Target (PCs)"
+                          value={t.target_count}
+                          onChange={e => handleTierChange(idx, 'target_count', e.target.value)}
+                          className="block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Bonus (e.g. $500 each, team dinner)"
+                          value={t.bonus}
+                          onChange={e => handleTierChange(idx, 'bonus', e.target.value)}
+                          className="block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTier(idx)}
+                          disabled={salesGoalForm.tiers.length === 1}
+                          className="p-2 text-red-400 hover:text-red-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title="Remove tier"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-200 mb-1">Timeframe (counts delivered PCs in this range)</label>
@@ -829,20 +956,22 @@ export default function AdminPanel() {
                   <p className="text-gray-400">No inquiries found.</p>
                 ) : inquiries.map(inq => (
                   <div key={inq._id} className="border border-gray-600 rounded-lg p-4 bg-gray-800">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className={`inline-block px-2 py-1 text-xs rounded-full mb-2 mr-2 ${
-                          inq.urgency === 'high' ? 'bg-red-900/50 text-red-800' :
-                          inq.urgency === 'medium' ? 'bg-yellow-900/50 text-yellow-200' : 'bg-blue-900/50 text-blue-200'
-                        }`}>
-                          {inq.urgency}
-                        </span>
-                        <span className="inline-block px-2 py-1 text-xs rounded-full bg-gray-700 text-gray-200 mb-2">
-                          Status: {inq.status}
-                        </span>
-                        <h4 className="font-bold text-white">{inq.subject}</h4>
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          <span className={`inline-block px-2 py-1 text-xs rounded-full ${
+                            inq.urgency === 'high' ? 'bg-red-900/50 text-red-800' :
+                            inq.urgency === 'medium' ? 'bg-yellow-900/50 text-yellow-200' : 'bg-blue-900/50 text-blue-200'
+                          }`}>
+                            {inq.urgency}
+                          </span>
+                          <span className="inline-block px-2 py-1 text-xs rounded-full bg-gray-700 text-gray-200">
+                            Status: {inq.status}
+                          </span>
+                        </div>
+                        <h4 className="font-bold text-white break-words">{inq.subject}</h4>
                       </div>
-                      <span className="text-xs text-gray-400">{moment(inq.created_at).fromNow()}</span>
+                      <span className="text-xs text-gray-400 flex-shrink-0">{moment(inq.created_at).fromNow()}</span>
                     </div>
                     <p className="mt-2 text-sm text-gray-300">{inq.details}</p>
                     <div className="mt-3 text-xs text-gray-400 border-t border-gray-700 pt-2">

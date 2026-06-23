@@ -181,10 +181,16 @@ const meetingSchema = new mongoose.Schema({
   updated_at: { type: Date, default: Date.now }
 });
 
+const salesGoalTierSchema = new mongoose.Schema({
+  target_count: { type: Number, required: true },
+  bonus: { type: String, default: '' }
+}, { _id: false });
+
 const salesGoalSchema = new mongoose.Schema({
   singleton: { type: String, default: 'goal', unique: true },
   label: { type: String, default: 'Sales Goal' },
-  target_count: { type: Number, default: 0 },
+  tiers: { type: [salesGoalTierSchema], default: [] },
+  target_count: { type: Number, default: 0 }, // legacy fallback when tiers is empty
   period_kind: { type: String, enum: ['month', 'year', 'days', 'range'], default: 'month' },
   period_days: { type: Number, default: 30 },
   period_start: { type: Date },
@@ -1558,7 +1564,7 @@ const ordersCountCache = new Map(); // query -> { count, fetched_at }
 const ORDERS_CACHE_TTL_MS = 30 * 1000;
 
 async function fetchDeliveredCount(query) {
-  const baseUrl = process.env.LANFORGE_ORDERS_API_URL || 'http://localhost:5001';
+  const baseUrl = process.env.LANFORGE_ORDERS_API_URL || 'http://localhost:5001/api';
   const apiKey = process.env.LANFORGE_ORDERS_API_KEY;
   if (!apiKey) throw new Error('LANFORGE_ORDERS_API_KEY is not configured');
   if (!query) throw new Error('Missing timeframe configuration');
@@ -1571,7 +1577,7 @@ async function fetchDeliveredCount(query) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const url = `${baseUrl.replace(/\/+$/, '')}/api/orders/delivered-count?${query}`;
+    const url = `${baseUrl.replace(/\/+$/, '')}/orders/delivered-count?${query}`;
     const r = await fetch(url, { headers: { 'X-API-Key': apiKey }, signal: controller.signal });
     if (!r.ok) throw new Error(`Orders API returned ${r.status}`);
     const text = await r.text();
@@ -1611,11 +1617,19 @@ app.get('/api/sales-goal', requireAuth, async (req, res) => {
       console.error('Sales goal fetch error:', fetchErr);
     }
 
+    const obj = goal.toObject();
+    let tiers = Array.isArray(obj.tiers) ? obj.tiers.slice() : [];
+    if (tiers.length === 0 && obj.target_count > 0) {
+      tiers = [{ target_count: obj.target_count, bonus: '' }];
+    }
+    tiers.sort((a, b) => a.target_count - b.target_count);
+
     res.json({
       success: true,
       data: {
         goal: {
-          ...goal.toObject(),
+          ...obj,
+          tiers,
           current_count: liveCount,
           last_fetched_count: liveCount,
           last_fetched_at: fetchedAt,
@@ -1631,15 +1645,34 @@ app.get('/api/sales-goal', requireAuth, async (req, res) => {
 
 app.put('/api/admin/sales-goal', requireAdmin, async (req, res) => {
   try {
-    const { label, target_count, period_kind, period_days, period_start, period_end } = req.body;
+    const { label, tiers, period_kind, period_days, period_start, period_end } = req.body;
     const update = { updated_at: new Date(), updated_by: req.session.userId };
     if (label !== undefined) update.label = label;
-    if (target_count !== undefined) {
-      const n = Number(target_count);
-      if (Number.isNaN(n) || n < 0) {
-        return res.status(400).json({ success: false, error: 'target_count must be a non-negative number' });
+    if (tiers !== undefined) {
+      if (!Array.isArray(tiers)) {
+        return res.status(400).json({ success: false, error: 'tiers must be an array' });
       }
-      update.target_count = Math.floor(n);
+      const cleaned = [];
+      for (const t of tiers) {
+        const n = Number(t?.target_count);
+        if (!Number.isFinite(n) || n < 1) {
+          return res.status(400).json({ success: false, error: 'Each tier needs a target_count >= 1' });
+        }
+        cleaned.push({
+          target_count: Math.floor(n),
+          bonus: typeof t.bonus === 'string' ? t.bonus.slice(0, 200) : ''
+        });
+      }
+      cleaned.sort((a, b) => a.target_count - b.target_count);
+      // De-dupe identical targets
+      const seen = new Set();
+      const deduped = cleaned.filter(t => {
+        if (seen.has(t.target_count)) return false;
+        seen.add(t.target_count);
+        return true;
+      });
+      update.tiers = deduped;
+      update.target_count = 0; // legacy field is no longer used once tiers are set
     }
     if (period_kind !== undefined) {
       if (!['month', 'year', 'days', 'range'].includes(period_kind)) {
