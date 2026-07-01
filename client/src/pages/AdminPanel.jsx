@@ -1,15 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
-import { Users, Megaphone, HelpCircle, UserPlus, Plus, Settings, AlertCircle, Edit, Trash2, Key, CheckSquare, Video, UserX, Target } from 'lucide-react';
+import { Users, Megaphone, HelpCircle, UserPlus, Plus, Settings, AlertCircle, Edit, Trash2, Key, CheckSquare, Video, UserX, Target, DollarSign } from 'lucide-react';
 import moment from 'moment';
 import CustomModal from '../components/CustomModal';
 import CustomSelect from '../components/CustomSelect';
 import CustomCheckbox from '../components/CustomCheckbox';
 import AdminTasks from '../components/AdminTasks';
 import AdminMeetings from '../components/AdminMeetings';
+import AdminPaychecks from '../components/AdminPaychecks';
+import { useAuth } from '../contexts/AuthContext';
 
 export default function AdminPanel() {
+  const { user: currentUser } = useAuth();
+  const canSeeSalesGoal = !!currentUser?.hasLanforge;
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
@@ -29,8 +33,10 @@ export default function AdminPanel() {
   const [error, setError] = useState('');
 
   // New user form state
-  const [newUser, setNewUser] = useState({ 
-    username: '', email: '', role: 'employee', hourly_rate: 0, 
+  const [newUser, setNewUser] = useState({
+    username: '', email: '', role: 'employee', hourly_rate: 0,
+    pay_type: 'hourly', salary_amount: 0, tax_classification: '1099',
+    paychecks_start_date: '',
     companies: {
       lanforge: { active: true, title: 'Employee', level: 3 },
       ascendance: { active: false, title: 'Employee', level: 3 }
@@ -110,8 +116,8 @@ export default function AdminPanel() {
         const g = res.data.data.goal || {};
         setSalesGoal(g);
         const tiers = Array.isArray(g.tiers) && g.tiers.length > 0
-          ? g.tiers.map(t => ({ target_count: t.target_count, bonus: t.bonus || '' }))
-          : [{ target_count: '', bonus: '' }];
+          ? g.tiers.map(t => ({ target_count: t.target_count, bonus: t.bonus || '', bonus_amount: t.bonus_amount || '' }))
+          : [{ target_count: '', bonus: '', bonus_amount: '' }];
         setSalesGoalForm({
           label: g.label || 'Sales Goal',
           tiers,
@@ -127,7 +133,7 @@ export default function AdminPanel() {
   };
 
   const handleAddTier = () => {
-    setSalesGoalForm(f => ({ ...f, tiers: [...f.tiers, { target_count: '', bonus: '' }] }));
+    setSalesGoalForm(f => ({ ...f, tiers: [...f.tiers, { target_count: '', bonus: '', bonus_amount: '' }] }));
   };
   const handleRemoveTier = (idx) => {
     setSalesGoalForm(f => ({ ...f, tiers: f.tiers.length === 1 ? f.tiers : f.tiers.filter((_, i) => i !== idx) }));
@@ -146,7 +152,11 @@ export default function AdminPanel() {
       return;
     }
     const cleanedTiers = salesGoalForm.tiers
-      .map(t => ({ target_count: parseInt(t.target_count, 10), bonus: t.bonus }))
+      .map(t => ({
+        target_count: parseInt(t.target_count, 10),
+        bonus: t.bonus,
+        bonus_amount: parseFloat(t.bonus_amount) || 0
+      }))
       .filter(t => Number.isFinite(t.target_count) && t.target_count > 0);
     if (cleanedTiers.length === 0) {
       setError('Add at least one tier with a target greater than 0.');
@@ -179,11 +189,13 @@ export default function AdminPanel() {
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      await Promise.all([fetchUsers(), fetchAnnouncements(), fetchInquiries(), fetchSalesGoal()]);
+      const tasks = [fetchUsers(), fetchAnnouncements(), fetchInquiries()];
+      if (canSeeSalesGoal) tasks.push(fetchSalesGoal());
+      await Promise.all(tasks);
       setLoading(false);
     };
     loadData();
-  }, []);
+  }, [canSeeSalesGoal]);
 
   const handleCreateUser = async (e) => {
     e.preventDefault();
@@ -195,8 +207,10 @@ export default function AdminPanel() {
       const res = await axios.post('/api/admin/create-user', newUser);
       if (res.data.success) {
         setShowNewUserForm(false);
-        setNewUser({ 
-          username: '', email: '', role: 'employee', hourly_rate: 0, 
+        setNewUser({
+          username: '', email: '', role: 'employee', hourly_rate: 0,
+          pay_type: 'hourly', salary_amount: 0, tax_classification: '1099',
+          paychecks_start_date: '',
           companies: {
             lanforge: { active: true, title: 'Employee', level: 3 },
             ascendance: { active: false, title: 'Employee', level: 3 }
@@ -445,14 +459,25 @@ export default function AdminPanel() {
             <Video className="mr-2" size={18} />
             Meetings
           </button>
+          {canSeeSalesGoal && (
+            <button
+              onClick={() => setActiveTab('sales-goal')}
+              className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
+                activeTab === 'sales-goal' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
+              }`}
+            >
+              <Target className="mr-2" size={18} />
+              Sales Goal
+            </button>
+          )}
           <button
-            onClick={() => setActiveTab('sales-goal')}
+            onClick={() => setActiveTab('paychecks')}
             className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
-              activeTab === 'sales-goal' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
+              activeTab === 'paychecks' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
             }`}
           >
-            <Target className="mr-2" size={18} />
-            Sales Goal
+            <DollarSign className="mr-2" size={18} />
+            Paychecks
           </button>
         </div>
 
@@ -486,9 +511,61 @@ export default function AdminPanel() {
                     <input type="email" value={newUser.email} onChange={e => setNewUser({...newUser, email: e.target.value})} className="mt-1 block w-full rounded-md border-gray-600 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500" />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-200">Hourly Pay Rate ($)</label>
-                    <input type="number" step="0.01" min="0" value={newUser.hourly_rate} onChange={e => setNewUser({...newUser, hourly_rate: parseFloat(e.target.value)})} className="mt-1 block w-full rounded-md border-gray-600 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500 bg-gray-800 text-white" />
+                    <label className="block text-sm font-medium text-gray-200 mb-1">Pay Type</label>
+                    <CustomSelect
+                      name="pay_type"
+                      value={newUser.pay_type}
+                      onChange={e => setNewUser({...newUser, pay_type: e.target.value})}
+                      options={[
+                        { value: 'hourly', label: 'Hourly' },
+                        { value: 'salary', label: 'Salary' },
+                        { value: 'commission', label: 'Commission only' },
+                        { value: 'none', label: 'No paychecks' }
+                      ]}
+                    />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-200 mb-1">Tax Classification</label>
+                    <CustomSelect
+                      name="tax_classification"
+                      value={newUser.tax_classification}
+                      onChange={e => setNewUser({...newUser, tax_classification: e.target.value})}
+                      options={[
+                        { value: '1099', label: '1099' },
+                        { value: 'W2', label: 'W2' }
+                      ]}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-200">Paycheck Start Date (optional)</label>
+                    <input
+                      type="date"
+                      value={newUser.paychecks_start_date}
+                      onChange={e => setNewUser({...newUser, paychecks_start_date: e.target.value})}
+                      className="mt-1 block w-full rounded-md border-gray-600 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500 bg-gray-800 text-white"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">No scheduled paychecks for periods ending before this date. Leave blank to use the account creation date.</p>
+                  </div>
+                  {newUser.pay_type === 'salary' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200">Annual Salary ($)</label>
+                      <input type="number" step="0.01" min="0" value={newUser.salary_amount} onChange={e => setNewUser({...newUser, salary_amount: parseFloat(e.target.value)})} className="mt-1 block w-full rounded-md border-gray-600 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500 bg-gray-800 text-white" />
+                      <p className="text-xs text-gray-400 mt-1">Paid semi-monthly (24 periods/year)</p>
+                    </div>
+                  )}
+                  {newUser.pay_type === 'hourly' && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-200">Hourly Pay Rate ($)</label>
+                      <input type="number" step="0.01" min="0" value={newUser.hourly_rate} onChange={e => setNewUser({...newUser, hourly_rate: parseFloat(e.target.value)})} className="mt-1 block w-full rounded-md border-gray-600 shadow-sm p-2 border focus:border-indigo-500 focus:ring-indigo-500 bg-gray-800 text-white" />
+                    </div>
+                  )}
+                  {(newUser.pay_type === 'commission' || newUser.pay_type === 'none') && (
+                    <div className="text-xs text-gray-400 italic self-center">
+                      {newUser.pay_type === 'commission'
+                        ? 'No scheduled paychecks — admins add commission paychecks per event.'
+                        : 'No paychecks will be auto-created for this user.'}
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-200 mb-1">App Role</label>
                     <CustomSelect 
@@ -569,6 +646,16 @@ export default function AdminPanel() {
                           }`}>
                             {u.role}
                           </span>
+                          {u.pay_type === 'none' && (
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-700 text-gray-200 border border-gray-600">
+                              No pay
+                            </span>
+                          )}
+                          {u.pay_type === 'commission' && (
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-amber-900/40 text-amber-200 border border-amber-700">
+                              Commission
+                            </span>
+                          )}
                           <span className="text-xs text-gray-400">
                             {u.total_hours?.toFixed(2) || '0.00'} hrs · {u.total_entries || 0} entries
                           </span>
@@ -631,11 +718,23 @@ export default function AdminPanel() {
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            u.role === 'admin' ? 'bg-purple-900/50 text-purple-200' : 'bg-green-900/50 text-green-200'
-                          }`}>
-                            {u.role}
-                          </span>
+                          <div className="flex items-center gap-1 flex-wrap">
+                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                              u.role === 'admin' ? 'bg-purple-900/50 text-purple-200' : 'bg-green-900/50 text-green-200'
+                            }`}>
+                              {u.role}
+                            </span>
+                            {u.pay_type === 'none' && (
+                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-700 text-gray-200 border border-gray-600">
+                                No pay
+                              </span>
+                            )}
+                            {u.pay_type === 'commission' && (
+                              <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-amber-900/40 text-amber-200 border border-amber-700">
+                                Commission
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           {u.username === 'admin' ? (
@@ -783,7 +882,11 @@ export default function AdminPanel() {
             <AdminMeetings users={activeUsers} onError={setError} />
           )}
 
-          {activeTab === 'sales-goal' && (
+          {activeTab === 'paychecks' && (
+            <AdminPaychecks users={users} onError={setError} />
+          )}
+
+          {activeTab === 'sales-goal' && canSeeSalesGoal && (
             <div className="space-y-6 max-w-xl">
               <div>
                 <h3 className="text-lg font-semibold text-white">Sales Goal</h3>
@@ -852,10 +955,10 @@ export default function AdminPanel() {
                       <Plus size={14} className="mr-1" /> Add tier
                     </button>
                   </div>
-                  <p className="text-xs text-gray-400 mb-2">Each tier is a PC-sold threshold and the bonus that gets unlocked when it's hit. Lowest tier comes first.</p>
+                  <p className="text-xs text-gray-400 mb-2">Each tier is a PC-sold threshold, the bonus description, and the per-user payout. When the threshold is hit, a bonus paycheck is auto-created for every active employee. Lowest tier first.</p>
                   <div className="space-y-2">
                     {salesGoalForm.tiers.map((t, idx) => (
-                      <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1fr_2fr_auto] gap-2 items-start">
+                      <div key={idx} className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_2fr_auto] gap-2 items-start">
                         <input
                           type="number"
                           min="1"
@@ -866,8 +969,17 @@ export default function AdminPanel() {
                           className="block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
                         />
                         <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Bonus $/user"
+                          value={t.bonus_amount}
+                          onChange={e => handleTierChange(idx, 'bonus_amount', e.target.value)}
+                          className="block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"
+                        />
+                        <input
                           type="text"
-                          placeholder="Bonus (e.g. $500 each, team dinner)"
+                          placeholder="Description (e.g. team dinner)"
                           value={t.bonus}
                           onChange={e => handleTierChange(idx, 'bonus', e.target.value)}
                           className="block w-full rounded-md border border-gray-600 bg-gray-800 text-white p-2 focus:border-indigo-500 focus:ring-indigo-500"

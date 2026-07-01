@@ -15,6 +15,7 @@ import AdminPanel from './pages/AdminPanel';
 import AdminUser from './pages/AdminUser';
 import ResetPassword from './pages/ResetPassword';
 import Tasks from './pages/Tasks';
+import Paychecks from './pages/Paychecks';
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/tasks" element={<Tasks />} />
+          <Route path="/paychecks" element={<Paychecks />} />
           <Route path="/company" element={<Company />} />
           <Route path="/handbook" element={<Handbook />} />
           <Route path="/help" element={<Help />} />

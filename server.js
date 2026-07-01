@@ -76,6 +76,10 @@ const userSchema = new mongoose.Schema({
   email: { type: String },
   role: { type: String, default: 'employee' },
   hourly_rate: { type: Number, default: 0.0 },
+  pay_type: { type: String, enum: ['hourly', 'salary', 'commission', 'none'], default: 'hourly' },
+  salary_amount: { type: Number, default: 0.0 },
+  tax_classification: { type: String, enum: ['1099', 'W2'], default: '1099' },
+  paychecks_start_date: { type: Date },
   companies: {
     lanforge: {
       active: { type: Boolean, default: true },
@@ -183,13 +187,23 @@ const meetingSchema = new mongoose.Schema({
 
 const salesGoalTierSchema = new mongoose.Schema({
   target_count: { type: Number, required: true },
-  bonus: { type: String, default: '' }
+  bonus: { type: String, default: '' },
+  bonus_amount: { type: Number, default: 0 }
+}, { _id: false });
+
+const salesGoalAwardSchema = new mongoose.Schema({
+  target_count: { type: Number, required: true },
+  period_key: { type: String, required: true },
+  awarded_at: { type: Date, default: Date.now },
+  amount_per_user: { type: Number, default: 0 },
+  user_count: { type: Number, default: 0 }
 }, { _id: false });
 
 const salesGoalSchema = new mongoose.Schema({
   singleton: { type: String, default: 'goal', unique: true },
   label: { type: String, default: 'Sales Goal' },
   tiers: { type: [salesGoalTierSchema], default: [] },
+  awarded_tiers: { type: [salesGoalAwardSchema], default: [] },
   target_count: { type: Number, default: 0 }, // legacy fallback when tiers is empty
   period_kind: { type: String, enum: ['month', 'year', 'days', 'range'], default: 'month' },
   period_days: { type: Number, default: 30 },
@@ -202,6 +216,47 @@ const salesGoalSchema = new mongoose.Schema({
   updated_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 });
 
+const payRateSchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  effective_date: { type: Date, required: true },
+  pay_type: { type: String, enum: ['hourly', 'salary', 'commission', 'none'], required: true },
+  hourly_rate: { type: Number, default: 0 },
+  salary_amount: { type: Number, default: 0 },
+  tax_classification: { type: String, enum: ['1099', 'W2'], default: '1099' },
+  note: { type: String, default: '' },
+  created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  created_at: { type: Date, default: Date.now }
+});
+payRateSchema.index({ user_id: 1, effective_date: -1 });
+
+const paycheckSchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  period_start: { type: Date, required: true },
+  period_end: { type: Date, required: true },
+  period_key: { type: String, required: true },
+  pay_date: { type: Date, required: true },
+  pay_type: { type: String, enum: ['hourly', 'salary', 'bonus', 'commission'], required: true },
+  tax_classification: { type: String, enum: ['1099', 'W2'], default: '1099' },
+  hourly_rate: { type: Number, default: 0 },
+  salary_amount: { type: Number, default: 0 },
+  hours: { type: Number, default: 0 },
+  amount: { type: Number, default: 0 },
+  amount_override: { type: Boolean, default: false },
+  is_bonus: { type: Boolean, default: false },
+  bonus_description: { type: String, default: '' },
+  bonus_source: { type: String, enum: ['manual', 'sales_goal'], default: 'manual' },
+  bonus_source_ref: { type: String, default: '' },
+  is_commission: { type: Boolean, default: false },
+  commission_description: { type: String, default: '' },
+  is_paid: { type: Boolean, default: false },
+  paid_at: { type: Date },
+  paid_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  notes: { type: String, default: '' },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+paycheckSchema.index({ user_id: 1, period_key: 1 }, { unique: true });
+
 // Create models
 const User = mongoose.model('User', userSchema);
 const TimeEntry = mongoose.model('TimeEntry', timeEntrySchema);
@@ -210,6 +265,8 @@ const Announcement = mongoose.model('Announcement', announcementSchema);
 const Task = mongoose.model('Task', taskSchema);
 const Meeting = mongoose.model('Meeting', meetingSchema);
 const SalesGoal = mongoose.model('SalesGoal', salesGoalSchema);
+const Paycheck = mongoose.model('Paycheck', paycheckSchema);
+const PayRate = mongoose.model('PayRate', payRateSchema);
 
 // Middleware
 app.use(express.json());
@@ -244,6 +301,26 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function userHasLanforge(user) {
+  if (!user) return false;
+  if (user.companies && (user.companies.lanforge || user.companies.ascendance)) {
+    return !!user.companies.lanforge?.active;
+  }
+  return user.company === 'LANForge';
+}
+
+async function requireLanforgePosition(req, res, next) {
+  try {
+    const user = await User.findById(req.session.userId);
+    if (!userHasLanforge(user)) {
+      return res.status(403).json({ success: false, error: 'LANForge position required' });
+    }
+    next();
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+}
+
 // API Routes
 app.get('/api/auth/me', async (req, res) => {
   if (req.session.userId) {
@@ -255,10 +332,12 @@ app.get('/api/auth/me', async (req, res) => {
           username: req.session.username,
           role: req.session.role,
           hourlyRate: req.session.hourlyRate,
+          payType: user.pay_type || 'hourly',
           needsPasswordReset: req.session.needsPasswordReset,
           handbookAgreed: user.handbook_agreed,
           handbookVersion: user.handbook_version,
-          timezone: user.timezone || ''
+          timezone: user.timezone || '',
+          hasLanforge: userHasLanforge(user)
         }
       });
     } catch (err) {
@@ -782,6 +861,7 @@ app.get('/api/admin', requireAdmin, async (req, res) => {
           email: 1,
           role: 1,
           hourly_rate: 1,
+          pay_type: 1,
           employment_status: 1,
           status_changed_at: 1,
           status_note: 1,
@@ -906,15 +986,37 @@ app.post('/api/admin/remove-time', requireAdmin, async (req, res) => {
 // User management routes
 app.post('/api/admin/edit-user', requireAdmin, async (req, res) => {
   try {
-    const { userId, username, email, role, hourly_rate, companies } = req.body;
-    
+    const { userId, username, email, role, hourly_rate, companies, pay_type, salary_amount, tax_classification, paychecks_start_date } = req.body;
+
     const updateData = {
       username,
       email,
       role,
       hourly_rate: parseFloat(hourly_rate)
     };
-    
+
+    if (['hourly', 'salary', 'commission', 'none'].includes(pay_type)) {
+      updateData.pay_type = pay_type;
+    }
+    if (salary_amount !== undefined) {
+      const parsed = parseFloat(salary_amount);
+      updateData.salary_amount = Number.isFinite(parsed) ? parsed : 0;
+    }
+    if (tax_classification === '1099' || tax_classification === 'W2') {
+      updateData.tax_classification = tax_classification;
+    }
+    if (paychecks_start_date !== undefined) {
+      if (paychecks_start_date === '' || paychecks_start_date === null) {
+        updateData.paychecks_start_date = null;
+      } else {
+        const parsed = new Date(paychecks_start_date);
+        if (Number.isNaN(parsed.getTime())) {
+          return res.status(400).json({ success: false, error: 'Invalid paycheck start date' });
+        }
+        updateData.paychecks_start_date = parsed;
+      }
+    }
+
     if (companies) {
       updateData.companies = companies;
     }
@@ -961,7 +1063,7 @@ app.post('/api/admin/delete-user', requireAdmin, async (req, res) => {
 
 app.post('/api/admin/create-user', requireAdmin, async (req, res) => {
   try {
-    const { username, email, role, hourly_rate, companies } = req.body;
+    const { username, email, role, hourly_rate, companies, pay_type, salary_amount, tax_classification, paychecks_start_date } = req.body;
     
     // Check if user already exists
     const escapedUsername = username.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -981,6 +1083,10 @@ app.post('/api/admin/create-user', requireAdmin, async (req, res) => {
       email,
       role: role || 'employee',
       hourly_rate: parseFloat(hourly_rate) || 0.0,
+      pay_type: ['hourly', 'salary', 'commission', 'none'].includes(pay_type) ? pay_type : 'hourly',
+      salary_amount: parseFloat(salary_amount) || 0.0,
+      tax_classification: tax_classification === 'W2' ? 'W2' : '1099',
+      paychecks_start_date: paychecks_start_date ? new Date(paychecks_start_date) : undefined,
       companies: companies || {
         lanforge: { active: true, title: 'Employee', level: 3 },
         ascendance: { active: false, title: 'Employee', level: 3 }
@@ -990,7 +1096,22 @@ app.post('/api/admin/create-user', requireAdmin, async (req, res) => {
     });
     
     await newUser.save();
-    
+
+    try {
+      await PayRate.create({
+        user_id: newUser._id,
+        effective_date: newUser.created_at || new Date(),
+        pay_type: newUser.pay_type,
+        hourly_rate: newUser.hourly_rate || 0,
+        salary_amount: newUser.salary_amount || 0,
+        tax_classification: newUser.tax_classification || '1099',
+        note: 'Initial pay rate',
+        created_by: req.session.userId
+      });
+    } catch (rateErr) {
+      console.error('Failed to seed initial pay rate:', rateErr);
+    }
+
     if (email && resend) {
       try {
         await resend.emails.send({
@@ -1590,9 +1711,94 @@ async function fetchDeliveredCount(query) {
   }
 }
 
+function salesGoalPeriodKey(goal) {
+  const kind = goal.period_kind || 'month';
+  if (kind === 'month') return `month-${moment().format('YYYY-MM')}`;
+  if (kind === 'year') return `year-${moment().format('YYYY')}`;
+  if (kind === 'range') {
+    if (!goal.period_start || !goal.period_end) return null;
+    const fmt = (d) => moment(d).format('YYYY-MM-DD');
+    return `range-${fmt(goal.period_start)}-${fmt(goal.period_end)}`;
+  }
+  return null; // 'days' (rolling) — don't auto-award since the window slides
+}
+
+async function maybeAwardSalesGoalBonuses(goal, liveCount) {
+  if (!Array.isArray(goal.tiers) || goal.tiers.length === 0) return;
+  const periodKey = salesGoalPeriodKey(goal);
+  if (!periodKey) return;
+
+  const awarded = Array.isArray(goal.awarded_tiers) ? goal.awarded_tiers : [];
+  const awardedSet = new Set(awarded.map(a => `${a.target_count}-${a.period_key}`));
+
+  const tiersToAward = goal.tiers
+    .filter(t => t.target_count > 0 && (t.bonus_amount || 0) > 0)
+    .filter(t => liveCount >= t.target_count)
+    .filter(t => !awardedSet.has(`${t.target_count}-${periodKey}`));
+
+  if (tiersToAward.length === 0) return;
+
+  const activeUsers = await User.find({
+    $and: [
+      { $or: [{ employment_status: 'active' }, { employment_status: { $exists: false } }] },
+      { $or: [{ pay_type: { $ne: 'none' } }, { pay_type: { $exists: false } }] }
+    ]
+  });
+  if (activeUsers.length === 0) return;
+
+  const newAwards = [];
+  for (const tier of tiersToAward) {
+    const amount = tier.bonus_amount;
+    const payDate = new Date();
+    const docs = activeUsers.map(u => ({
+      user_id: u._id,
+      period_start: payDate,
+      period_end: payDate,
+      period_key: `bonus-sg-${tier.target_count}-${periodKey}-${u._id}`,
+      pay_date: payDate,
+      pay_type: 'bonus',
+      tax_classification: u.tax_classification || '1099',
+      hourly_rate: 0,
+      salary_amount: 0,
+      hours: 0,
+      amount,
+      amount_override: false,
+      is_bonus: true,
+      bonus_description: `${goal.label || 'Sales Goal'}: ${tier.target_count.toLocaleString()} PCs tier reached${tier.bonus ? ` (${tier.bonus})` : ''}`,
+      bonus_source: 'sales_goal',
+      bonus_source_ref: periodKey,
+      is_paid: false
+    }));
+    try {
+      await Paycheck.insertMany(docs, { ordered: false });
+    } catch (insertErr) {
+      if (insertErr.code !== 11000) {
+        console.error('Failed to insert auto bonus paychecks:', insertErr);
+        continue;
+      }
+    }
+    newAwards.push({
+      target_count: tier.target_count,
+      period_key: periodKey,
+      awarded_at: new Date(),
+      amount_per_user: amount,
+      user_count: activeUsers.length
+    });
+  }
+
+  if (newAwards.length > 0) {
+    goal.awarded_tiers = [...awarded, ...newAwards];
+    await goal.save();
+  }
+}
+
 // Sales goal routes
 app.get('/api/sales-goal', requireAuth, async (req, res) => {
   try {
+    const requester = await User.findById(req.session.userId);
+    if (!userHasLanforge(requester)) {
+      return res.json({ success: true, data: { goal: null } });
+    }
     const goal = await SalesGoal.findOneAndUpdate(
       { singleton: 'goal' },
       { $setOnInsert: { singleton: 'goal' } },
@@ -1610,6 +1816,11 @@ app.get('/api/sales-goal', requireAuth, async (req, res) => {
       goal.last_fetched_at = fetchedAt;
       goal.last_fetch_error = '';
       await goal.save();
+      try {
+        await maybeAwardSalesGoalBonuses(goal, liveCount);
+      } catch (awardErr) {
+        console.error('Auto-award sales goal bonuses failed:', awardErr);
+      }
     } catch (fetchErr) {
       fetchError = fetchErr.message || 'Failed to fetch orders count';
       goal.last_fetch_error = fetchError;
@@ -1643,7 +1854,7 @@ app.get('/api/sales-goal', requireAuth, async (req, res) => {
   }
 });
 
-app.put('/api/admin/sales-goal', requireAdmin, async (req, res) => {
+app.put('/api/admin/sales-goal', requireAdmin, requireLanforgePosition, async (req, res) => {
   try {
     const { label, tiers, period_kind, period_days, period_start, period_end } = req.body;
     const update = { updated_at: new Date(), updated_by: req.session.userId };
@@ -1658,9 +1869,11 @@ app.put('/api/admin/sales-goal', requireAdmin, async (req, res) => {
         if (!Number.isFinite(n) || n < 1) {
           return res.status(400).json({ success: false, error: 'Each tier needs a target_count >= 1' });
         }
+        const bonusAmt = Number(t?.bonus_amount);
         cleaned.push({
           target_count: Math.floor(n),
-          bonus: typeof t.bonus === 'string' ? t.bonus.slice(0, 200) : ''
+          bonus: typeof t.bonus === 'string' ? t.bonus.slice(0, 200) : '',
+          bonus_amount: Number.isFinite(bonusAmt) && bonusAmt >= 0 ? bonusAmt : 0
         });
       }
       cleaned.sort((a, b) => a.target_count - b.target_count);
@@ -1701,6 +1914,722 @@ app.put('/api/admin/sales-goal', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('Update sales goal error:', err);
     res.status(500).json({ success: false, error: 'Failed to update sales goal' });
+  }
+});
+
+// Paycheck helpers
+const PAYCHECK_FIRST_YEAR = 2026;
+const BIWEEKLY_ANCHOR = moment('2026-07-01').startOf('day');
+
+function buildPayPeriodsForYear(year) {
+  const periods = [];
+  if (year < PAYCHECK_FIRST_YEAR) return periods;
+
+  for (let month = 0; month < 12; month++) {
+    const monthMoment = moment({ year, month, day: 1 });
+
+    const p1Start = monthMoment.clone().startOf('day');
+    const p1End = monthMoment.clone().date(15).endOf('day');
+    if (p1End.isBefore(BIWEEKLY_ANCHOR)) {
+      periods.push({
+        period_key: `${year}-${String(month + 1).padStart(2, '0')}-1`,
+        period_start: p1Start.toDate(),
+        period_end: p1End.toDate(),
+        pay_date: monthMoment.clone().date(20).startOf('day').toDate(),
+        label: `${monthMoment.format('MMM')} 1 - 15, ${year}`,
+        cadence: 'semi-monthly'
+      });
+    }
+
+    const p2Start = monthMoment.clone().date(16).startOf('day');
+    const p2End = monthMoment.clone().endOf('month');
+    if (p2End.isBefore(BIWEEKLY_ANCHOR)) {
+      periods.push({
+        period_key: `${year}-${String(month + 1).padStart(2, '0')}-2`,
+        period_start: p2Start.toDate(),
+        period_end: p2End.toDate(),
+        pay_date: monthMoment.clone().add(1, 'month').date(5).startOf('day').toDate(),
+        label: `${monthMoment.format('MMM')} 16 - ${p2End.format('D')}, ${year}`,
+        cadence: 'semi-monthly'
+      });
+    }
+  }
+
+  let periodStart = BIWEEKLY_ANCHOR.clone();
+  let biweeklyIdx = 1;
+  while (periodStart.year() <= year) {
+    const periodEnd = periodStart.clone().add(13, 'days').endOf('day');
+    if (periodStart.year() === year) {
+      periods.push({
+        period_key: `${year}-bw-${String(biweeklyIdx).padStart(2, '0')}`,
+        period_start: periodStart.toDate(),
+        period_end: periodEnd.toDate(),
+        pay_date: periodEnd.clone().add(5, 'days').startOf('day').toDate(),
+        label: `${periodStart.format('MMM D')} – ${periodEnd.format('MMM D, YYYY')}`,
+        cadence: 'biweekly'
+      });
+    }
+    biweeklyIdx++;
+    periodStart = periodEnd.clone().add(1, 'millisecond').startOf('day');
+  }
+
+  return periods;
+}
+
+function computeHoursForPeriod(timeEntries, userId, periodStart, periodEnd) {
+  let totalHours = 0;
+  for (const entry of timeEntries) {
+    if (String(entry.user_id) !== String(userId)) continue;
+    if (!entry.clock_out) continue;
+    const start = new Date(entry.clock_in);
+    if (start < periodStart || start > periodEnd) continue;
+    totalHours += (new Date(entry.clock_out) - start) / (1000 * 60 * 60);
+  }
+  return totalHours;
+}
+
+function computeAmount(payType, hours, hourlyRate, salaryAmount) {
+  if (payType === 'salary') {
+    return (salaryAmount || 0) / 24;
+  }
+  return (hours || 0) * (hourlyRate || 0);
+}
+
+function resolveRateAt(userHistory, user, date) {
+  const match = userHistory.find(r => new Date(r.effective_date) <= date);
+  if (match) {
+    return {
+      pay_type: match.pay_type,
+      hourly_rate: match.hourly_rate || 0,
+      salary_amount: match.salary_amount || 0,
+      tax_classification: match.tax_classification || '1099'
+    };
+  }
+  return {
+    pay_type: user.pay_type || 'hourly',
+    hourly_rate: user.hourly_rate || 0,
+    salary_amount: user.salary_amount || 0,
+    tax_classification: user.tax_classification || '1099'
+  };
+}
+
+app.post('/api/admin/user/:id/paychecks-start-date', requireAdmin, async (req, res) => {
+  try {
+    const { start_date } = req.body;
+    let value;
+    if (start_date === '' || start_date === null || start_date === undefined) {
+      value = null;
+    } else {
+      const parsed = new Date(start_date);
+      if (Number.isNaN(parsed.getTime())) {
+        return res.status(400).json({ success: false, error: 'Invalid date' });
+      }
+      value = parsed;
+    }
+    const updated = await User.findByIdAndUpdate(
+      req.params.id,
+      { paychecks_start_date: value },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ success: false, error: 'User not found' });
+    res.json({ success: true, paychecks_start_date: updated.paychecks_start_date });
+  } catch (err) {
+    console.error('Update paycheck start date error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update start date' });
+  }
+});
+
+app.get('/api/admin/user/:id/pay-history', requireAdmin, async (req, res) => {
+  try {
+    const history = await PayRate.find({ user_id: req.params.id })
+      .sort({ effective_date: -1 })
+      .populate('created_by', 'username');
+    res.json({ success: true, data: { history } });
+  } catch (err) {
+    console.error('Pay history list error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load pay history' });
+  }
+});
+
+app.post('/api/admin/user/:id/pay-history', requireAdmin, async (req, res) => {
+  try {
+    const { effective_date, pay_type, hourly_rate, salary_amount, tax_classification, note } = req.body;
+    if (!effective_date) {
+      return res.status(400).json({ success: false, error: 'Effective date is required' });
+    }
+    const parsedDate = new Date(effective_date);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return res.status(400).json({ success: false, error: 'Invalid effective date' });
+    }
+    if (!['hourly', 'salary', 'commission', 'none'].includes(pay_type)) {
+      return res.status(400).json({ success: false, error: 'pay_type must be hourly, salary, commission, or none' });
+    }
+
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+    const rate = new PayRate({
+      user_id: user._id,
+      effective_date: parsedDate,
+      pay_type,
+      hourly_rate: parseFloat(hourly_rate) || 0,
+      salary_amount: parseFloat(salary_amount) || 0,
+      tax_classification: tax_classification === 'W2' ? 'W2' : '1099',
+      note: (note || '').slice(0, 500),
+      created_by: req.session.userId
+    });
+    await rate.save();
+
+    if (parsedDate <= new Date()) {
+      user.pay_type = rate.pay_type;
+      user.hourly_rate = rate.hourly_rate;
+      user.salary_amount = rate.salary_amount;
+      user.tax_classification = rate.tax_classification;
+      await user.save();
+    }
+
+    res.json({ success: true, rate });
+  } catch (err) {
+    console.error('Add pay rate error:', err);
+    res.status(500).json({ success: false, error: 'Failed to add pay rate' });
+  }
+});
+
+app.delete('/api/admin/user/:id/pay-history/:rateId', requireAdmin, async (req, res) => {
+  try {
+    const removed = await PayRate.findOneAndDelete({ _id: req.params.rateId, user_id: req.params.id });
+    if (!removed) return res.status(404).json({ success: false, error: 'Pay rate not found' });
+
+    const latest = await PayRate.find({
+      user_id: req.params.id,
+      effective_date: { $lte: new Date() }
+    }).sort({ effective_date: -1 }).limit(1);
+    if (latest.length > 0) {
+      await User.findByIdAndUpdate(req.params.id, {
+        pay_type: latest[0].pay_type,
+        hourly_rate: latest[0].hourly_rate,
+        salary_amount: latest[0].salary_amount,
+        tax_classification: latest[0].tax_classification
+      });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete pay rate error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete pay rate' });
+  }
+});
+
+app.get('/api/admin/paychecks', requireAdmin, async (req, res) => {
+  try {
+    const year = parseInt(req.query.year, 10) || moment().year();
+    const periods = buildPayPeriodsForYear(year);
+    const yearStart = periods[0].period_start;
+    const yearEnd = periods[periods.length - 1].period_end;
+    const now = new Date();
+
+    const users = await User.find().sort({ username: 1 });
+    const allEntries = await TimeEntry.find({
+      clock_in: { $gte: yearStart, $lte: yearEnd }
+    });
+
+    const existing = await Paycheck.find({
+      period_start: { $gte: yearStart, $lte: yearEnd }
+    }).populate('paid_by', 'username');
+
+    const allRates = await PayRate.find({}).sort({ effective_date: -1 });
+    const ratesByUser = new Map();
+    for (const rate of allRates) {
+      const key = String(rate.user_id);
+      if (!ratesByUser.has(key)) ratesByUser.set(key, []);
+      ratesByUser.get(key).push(rate);
+    }
+
+    const existingMap = new Map();
+    for (const pc of existing) {
+      existingMap.set(`${pc.user_id}-${pc.period_key}`, pc);
+    }
+
+    const toInsert = [];
+    const toUpdate = [];
+    const result = [];
+
+    for (const user of users) {
+      const isActive = (user.employment_status || 'active') === 'active';
+      const userHistory = ratesByUser.get(String(user._id)) || [];
+      const userStart = (() => {
+        if (user.paychecks_start_date) return new Date(user.paychecks_start_date);
+        let start = user.created_at ? new Date(user.created_at) : new Date(0);
+        if (userHistory.length > 0) {
+          const earliest = new Date(userHistory[userHistory.length - 1].effective_date);
+          if (earliest < start) start = earliest;
+        }
+        return start;
+      })();
+
+      for (const period of periods) {
+        const mapKey = `${user._id}-${period.period_key}`;
+        let pc = existingMap.get(mapKey);
+        const hours = computeHoursForPeriod(allEntries, user._id, period.period_start, period.period_end);
+        const effective = resolveRateAt(userHistory, user, period.period_start);
+
+        if (!pc) {
+          if (period.period_end < userStart) continue;
+          if (!isActive && period.period_start > now) continue;
+          if (effective.pay_type === 'commission' || effective.pay_type === 'none') continue;
+
+          const amount = computeAmount(effective.pay_type, hours, effective.hourly_rate, effective.salary_amount);
+          pc = new Paycheck({
+            user_id: user._id,
+            period_start: period.period_start,
+            period_end: period.period_end,
+            period_key: period.period_key,
+            pay_date: period.pay_date,
+            pay_type: effective.pay_type,
+            tax_classification: effective.tax_classification,
+            hourly_rate: effective.hourly_rate,
+            salary_amount: effective.salary_amount,
+            hours,
+            amount,
+            amount_override: false,
+            is_paid: false
+          });
+          toInsert.push(pc);
+        } else if (!pc.is_paid) {
+          if (effective.pay_type === 'none' || effective.pay_type === 'commission') {
+            continue;
+          }
+          let changed = false;
+          if (pc.hours !== hours) {
+            pc.hours = hours;
+            changed = true;
+          }
+          if (pc.pay_type !== effective.pay_type) {
+            pc.pay_type = effective.pay_type;
+            changed = true;
+          }
+          if (pc.hourly_rate !== effective.hourly_rate) {
+            pc.hourly_rate = effective.hourly_rate;
+            changed = true;
+          }
+          if (pc.salary_amount !== effective.salary_amount) {
+            pc.salary_amount = effective.salary_amount;
+            changed = true;
+          }
+          if (pc.tax_classification !== effective.tax_classification) {
+            pc.tax_classification = effective.tax_classification;
+            changed = true;
+          }
+          if (!pc.amount_override) {
+            const amount = computeAmount(pc.pay_type, pc.hours, pc.hourly_rate, pc.salary_amount);
+            if (pc.amount !== amount) {
+              pc.amount = amount;
+              changed = true;
+            }
+          }
+          if (changed) {
+            pc.updated_at = new Date();
+            toUpdate.push(pc);
+          }
+        }
+
+        result.push({
+          paycheck: pc,
+          user
+        });
+      }
+    }
+
+    if (toInsert.length) {
+      try {
+        await Paycheck.insertMany(toInsert, { ordered: false });
+      } catch (err) {
+        if (err.code !== 11000) throw err;
+      }
+    }
+    if (toUpdate.length) {
+      await Promise.all(toUpdate.map(pc => pc.save()));
+    }
+
+    const includedIds = new Set(result.map(r => String(r.paycheck._id)).filter(Boolean));
+    const usersById = new Map(users.map(u => [String(u._id), u]));
+    for (const pc of existing) {
+      if (!pc.is_bonus && !pc.is_commission) continue;
+      if (includedIds.has(String(pc._id))) continue;
+      const user = usersById.get(String(pc.user_id));
+      if (!user) continue;
+      result.push({ paycheck: pc, user });
+    }
+
+    const paychecks = result.map(({ paycheck, user }) => {
+      const period = periods.find(p => p.period_key === paycheck.period_key);
+      const label = period
+        ? period.label
+        : (paycheck.is_bonus
+            ? `Bonus · ${moment(paycheck.pay_date).format('MMM D, YYYY')}`
+            : paycheck.is_commission
+              ? `Commission · ${moment(paycheck.pay_date).format('MMM D, YYYY')}`
+              : moment(paycheck.pay_date).format('MMM D, YYYY'));
+      return {
+        _id: paycheck._id,
+        user_id: paycheck.user_id,
+        username: user.username,
+        employment_status: user.employment_status || 'active',
+        period_start: paycheck.period_start,
+        period_end: paycheck.period_end,
+        period_key: paycheck.period_key,
+        period_label: label,
+        pay_date: paycheck.pay_date,
+        pay_type: paycheck.pay_type,
+        tax_classification: paycheck.tax_classification || '1099',
+        hourly_rate: paycheck.hourly_rate,
+        salary_amount: paycheck.salary_amount,
+        hours: paycheck.hours,
+        amount: paycheck.amount,
+        amount_override: paycheck.amount_override,
+        is_bonus: paycheck.is_bonus || false,
+        bonus_description: paycheck.bonus_description || '',
+        bonus_source: paycheck.bonus_source || '',
+        is_commission: paycheck.is_commission || false,
+        commission_description: paycheck.commission_description || '',
+        is_paid: paycheck.is_paid,
+        paid_at: paycheck.paid_at,
+        paid_by: paycheck.paid_by,
+        notes: paycheck.notes
+      };
+    });
+
+    paychecks.sort((a, b) => {
+      if (a.is_paid !== b.is_paid) return a.is_paid ? 1 : -1;
+      const aStart = new Date(a.period_start).getTime();
+      const bStart = new Date(b.period_start).getTime();
+      if (aStart !== bStart) return aStart - bStart;
+      return a.username.localeCompare(b.username);
+    });
+
+    res.json({ success: true, data: { paychecks, year } });
+  } catch (err) {
+    console.error('Paychecks list error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load paychecks' });
+  }
+});
+
+app.put('/api/admin/paychecks/:id', requireAdmin, async (req, res) => {
+  try {
+    const { amount, notes, clear_override, tax_classification } = req.body;
+    const pc = await Paycheck.findById(req.params.id);
+    if (!pc) return res.status(404).json({ success: false, error: 'Paycheck not found' });
+    if (pc.is_paid) {
+      return res.status(400).json({ success: false, error: 'Paid paychecks cannot be edited. Unmark as paid first.' });
+    }
+
+    if (clear_override) {
+      pc.amount_override = false;
+      const recomputed = computeAmount(pc.pay_type, pc.hours, pc.hourly_rate, pc.salary_amount);
+      pc.amount = recomputed;
+    } else if (amount !== undefined) {
+      const parsed = parseFloat(amount);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ success: false, error: 'Invalid amount' });
+      }
+      pc.amount = parsed;
+      pc.amount_override = true;
+    }
+
+    if (tax_classification === '1099' || tax_classification === 'W2') {
+      pc.tax_classification = tax_classification;
+    }
+    if (notes !== undefined) pc.notes = String(notes).slice(0, 1000);
+    pc.updated_at = new Date();
+    await pc.save();
+    res.json({ success: true, paycheck: pc });
+  } catch (err) {
+    console.error('Update paycheck error:', err);
+    res.status(500).json({ success: false, error: 'Failed to update paycheck' });
+  }
+});
+
+app.delete('/api/admin/paychecks/:id', requireAdmin, async (req, res) => {
+  try {
+    const pc = await Paycheck.findById(req.params.id);
+    if (!pc) return res.status(404).json({ success: false, error: 'Paycheck not found' });
+    if (pc.is_paid) {
+      return res.status(400).json({ success: false, error: 'Cannot delete a paid paycheck. Unmark as paid first.' });
+    }
+    await Paycheck.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete paycheck error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete paycheck' });
+  }
+});
+
+app.post('/api/admin/paychecks/commission', requireAdmin, async (req, res) => {
+  try {
+    const { user_ids, amount, description, pay_date, tax_classification } = req.body;
+    if (!Array.isArray(user_ids) || user_ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'Pick at least one user' });
+    }
+    const parsedAmount = parseFloat(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ success: false, error: 'Enter a positive commission amount' });
+    }
+    if (!description || !String(description).trim()) {
+      return res.status(400).json({ success: false, error: 'Commission description is required' });
+    }
+    const date = pay_date ? new Date(pay_date) : new Date();
+    if (Number.isNaN(date.getTime())) {
+      return res.status(400).json({ success: false, error: 'Invalid pay date' });
+    }
+
+    const users = await User.find({ _id: { $in: user_ids } });
+    if (users.length === 0) return res.status(404).json({ success: false, error: 'No users found' });
+
+    const docs = users.map(u => ({
+      user_id: u._id,
+      period_start: date,
+      period_end: date,
+      period_key: `commission-${Date.now()}-${u._id}`,
+      pay_date: date,
+      pay_type: 'commission',
+      tax_classification: (tax_classification === 'W2' ? 'W2' : (u.tax_classification || '1099')),
+      hourly_rate: 0,
+      salary_amount: 0,
+      hours: 0,
+      amount: parsedAmount,
+      amount_override: true,
+      is_commission: true,
+      commission_description: String(description).slice(0, 500),
+      is_paid: false
+    }));
+    const created = await Paycheck.insertMany(docs);
+    res.json({ success: true, created: created.length });
+  } catch (err) {
+    console.error('Create commission error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create commission' });
+  }
+});
+
+app.get('/api/paychecks/me', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+
+    const year = moment().year();
+    const periods = buildPayPeriodsForYear(year);
+    const yearStart = periods.length > 0 ? periods[0].period_start : moment(`${year}-01-01`).toDate();
+    const yearEnd = periods.length > 0 ? periods[periods.length - 1].period_end : moment(`${year}-12-31`).endOf('day').toDate();
+
+    const userRates = await PayRate.find({ user_id: userId }).sort({ effective_date: -1 });
+    const existing = await Paycheck.find({
+      user_id: userId,
+      period_start: { $gte: yearStart, $lte: yearEnd }
+    });
+    const existingMap = new Map(existing.map(pc => [pc.period_key, pc]));
+
+    const now = new Date();
+    const allEntries = await TimeEntry.find({
+      user_id: userId,
+      clock_in: { $gte: yearStart, $lte: yearEnd }
+    });
+
+    const currentPayType = user.pay_type || 'hourly';
+    const optedOut = currentPayType === 'none';
+    const userStart = (() => {
+      if (user.paychecks_start_date) return new Date(user.paychecks_start_date);
+      let start = user.created_at ? new Date(user.created_at) : new Date(0);
+      if (userRates.length > 0) {
+        const earliest = new Date(userRates[userRates.length - 1].effective_date);
+        if (earliest < start) start = earliest;
+      }
+      return start;
+    })();
+
+    const items = [];
+    for (const period of periods) {
+      if (period.period_end < userStart) continue;
+      const effective = resolveRateAt(userRates, user, period.period_start);
+      const pc = existingMap.get(period.period_key);
+      if (pc) {
+        if (optedOut && !pc.is_paid) continue;
+        items.push({
+          _id: pc._id,
+          period_start: pc.period_start,
+          period_end: pc.period_end,
+          period_label: period.label,
+          pay_date: pc.pay_date,
+          pay_type: pc.pay_type,
+          tax_classification: pc.tax_classification || '1099',
+          hours: pc.hours,
+          amount: pc.amount,
+          is_paid: pc.is_paid,
+          paid_at: pc.paid_at,
+          is_bonus: false,
+          is_commission: false,
+          upcoming: false
+        });
+      } else if (!optedOut && effective.pay_type !== 'commission' && effective.pay_type !== 'none' && period.period_end >= now) {
+        let projHours = 0;
+        for (const entry of allEntries) {
+          if (!entry.clock_out) continue;
+          const start = new Date(entry.clock_in);
+          if (start < period.period_start || start > period.period_end) continue;
+          projHours += (new Date(entry.clock_out) - start) / (1000 * 60 * 60);
+        }
+        const projAmount = computeAmount(effective.pay_type, projHours, effective.hourly_rate, effective.salary_amount);
+        items.push({
+          _id: `proj-${period.period_key}`,
+          period_start: period.period_start,
+          period_end: period.period_end,
+          period_label: period.label,
+          pay_date: period.pay_date,
+          pay_type: effective.pay_type,
+          tax_classification: effective.tax_classification,
+          hours: projHours,
+          amount: projAmount,
+          is_paid: false,
+          is_bonus: false,
+          is_commission: false,
+          upcoming: true
+        });
+      }
+    }
+
+    for (const pc of existing) {
+      if (!pc.is_bonus && !pc.is_commission) continue;
+      items.push({
+        _id: pc._id,
+        period_start: pc.period_start,
+        period_end: pc.period_end,
+        period_label: pc.is_bonus
+          ? `Bonus · ${moment(pc.pay_date).format('MMM D, YYYY')}`
+          : `Commission · ${moment(pc.pay_date).format('MMM D, YYYY')}`,
+        pay_date: pc.pay_date,
+        pay_type: pc.pay_type,
+        tax_classification: pc.tax_classification || '1099',
+        hours: 0,
+        amount: pc.amount,
+        is_paid: pc.is_paid,
+        paid_at: pc.paid_at,
+        is_bonus: pc.is_bonus,
+        is_commission: pc.is_commission,
+        description: pc.bonus_description || pc.commission_description || '',
+        upcoming: false
+      });
+    }
+
+    items.sort((a, b) => new Date(b.period_start) - new Date(a.period_start));
+
+    const upcoming = items.filter(i => !i.is_paid && new Date(i.period_end) >= now).sort((a, b) => new Date(a.period_start) - new Date(b.period_start));
+    const upcomingIds = new Set(upcoming.slice(0, 2).map(i => String(i._id)));
+
+    const visible = items.filter(i => {
+      if (i.is_paid) return true;
+      if (new Date(i.period_end) < now) return true;
+      return upcomingIds.has(String(i._id));
+    });
+
+    res.json({
+      success: true,
+      data: {
+        paychecks: visible,
+        pay_type: user.pay_type || 'hourly',
+        tax_classification: user.tax_classification || '1099'
+      }
+    });
+  } catch (err) {
+    console.error('Get my paychecks error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load paychecks' });
+  }
+});
+
+app.post('/api/admin/paychecks/bonus', requireAdmin, async (req, res) => {
+  try {
+    const { user_ids, amount, description, pay_date, tax_classification } = req.body;
+    if (!Array.isArray(user_ids) || user_ids.length === 0) {
+      return res.status(400).json({ success: false, error: 'Pick at least one user' });
+    }
+    const parsedAmount = parseFloat(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ success: false, error: 'Enter a positive bonus amount' });
+    }
+    if (!description || !String(description).trim()) {
+      return res.status(400).json({ success: false, error: 'Bonus description is required' });
+    }
+    const date = pay_date ? new Date(pay_date) : new Date();
+    if (Number.isNaN(date.getTime())) {
+      return res.status(400).json({ success: false, error: 'Invalid pay date' });
+    }
+
+    const users = await User.find({ _id: { $in: user_ids } });
+    if (users.length === 0) return res.status(404).json({ success: false, error: 'No users found' });
+
+    const docs = users.map(u => ({
+      user_id: u._id,
+      period_start: date,
+      period_end: date,
+      period_key: `bonus-manual-${Date.now()}-${u._id}`,
+      pay_date: date,
+      pay_type: 'bonus',
+      tax_classification: (tax_classification === 'W2' ? 'W2' : (u.tax_classification || '1099')),
+      hourly_rate: 0,
+      salary_amount: 0,
+      hours: 0,
+      amount: parsedAmount,
+      amount_override: true,
+      is_bonus: true,
+      bonus_description: String(description).slice(0, 500),
+      bonus_source: 'manual',
+      is_paid: false
+    }));
+    const created = await Paycheck.insertMany(docs);
+    res.json({ success: true, created: created.length });
+  } catch (err) {
+    console.error('Create bonus error:', err);
+    res.status(500).json({ success: false, error: 'Failed to create bonus' });
+  }
+});
+
+app.post('/api/admin/paychecks/:id/mark-paid', requireAdmin, async (req, res) => {
+  try {
+    const pc = await Paycheck.findById(req.params.id);
+    if (!pc) return res.status(404).json({ success: false, error: 'Paycheck not found' });
+
+    if (pc.pay_type === 'hourly' && pc.hours === 0 && !pc.amount_override) {
+      return res.status(400).json({
+        success: false,
+        error: 'Hourly paycheck has 0 hours. Enter the paycheck amount before marking it paid.'
+      });
+    }
+    if (!Number.isFinite(pc.amount) || pc.amount < 0) {
+      return res.status(400).json({ success: false, error: 'Paycheck amount must be a valid non-negative number.' });
+    }
+
+    pc.is_paid = true;
+    pc.paid_at = new Date();
+    pc.paid_by = req.session.userId;
+    pc.updated_at = new Date();
+    await pc.save();
+    res.json({ success: true, paycheck: pc });
+  } catch (err) {
+    console.error('Mark paid error:', err);
+    res.status(500).json({ success: false, error: 'Failed to mark paycheck as paid' });
+  }
+});
+
+app.post('/api/admin/paychecks/:id/mark-unpaid', requireAdmin, async (req, res) => {
+  try {
+    const pc = await Paycheck.findById(req.params.id);
+    if (!pc) return res.status(404).json({ success: false, error: 'Paycheck not found' });
+    pc.is_paid = false;
+    pc.paid_at = undefined;
+    pc.paid_by = undefined;
+    pc.updated_at = new Date();
+    await pc.save();
+    res.json({ success: true, paycheck: pc });
+  } catch (err) {
+    console.error('Mark unpaid error:', err);
+    res.status(500).json({ success: false, error: 'Failed to mark paycheck as unpaid' });
   }
 });
 

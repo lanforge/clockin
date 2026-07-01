@@ -7,6 +7,7 @@ import CustomModal from '../components/CustomModal';
 import CustomSelect from '../components/CustomSelect';
 import CustomCheckbox from '../components/CustomCheckbox';
 import CustomDatePicker from '../components/CustomDatePicker';
+import PaySchedule from '../components/PaySchedule';
 
 export default function AdminUser() {
   const { id } = useParams();
@@ -164,9 +165,8 @@ export default function AdminUser() {
                   <label className="text-xs text-gray-400">Email</label>
                   <input type="email" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.email || ''} onChange={e => setEditForm({...editForm, email: e.target.value})} />
                 </div>
-                <div>
-                  <label className="text-xs text-gray-400">Hourly Pay Rate ($)</label>
-                  <input type="number" step="0.01" min="0" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.hourly_rate ?? 0} onChange={e => setEditForm({...editForm, hourly_rate: parseFloat(e.target.value)})} />
+                <div className="text-xs text-gray-400 italic border-l-2 border-gray-600 pl-3 py-1">
+                  Pay rate and tax classification are managed in the Pay Schedule card below.
                 </div>
                 <div className="pb-2">
                   <label className="text-xs text-gray-400 mb-1 block">App Role</label>
@@ -230,7 +230,20 @@ export default function AdminUser() {
                 <div><span className="text-xs text-gray-400 block">Username</span><div className="font-medium">{userData.username}</div></div>
                 <div><span className="text-xs text-gray-400 block">Email</span><div>{userData.email || 'N/A'}</div></div>
                 <div><span className="text-xs text-gray-400 block">App Role</span><div className="capitalize">{userData.role}</div></div>
-                <div><span className="text-xs text-gray-400 block">Hourly Pay Rate</span><div className="font-medium">${(userData.hourly_rate ?? 0).toFixed(2)}/hr</div></div>
+                <div>
+                  <span className="text-xs text-gray-400 block">Pay</span>
+                  {(() => {
+                    const pt = userData.pay_type || 'hourly';
+                    if (pt === 'salary') return <div className="font-medium">${(userData.salary_amount ?? 0).toFixed(2)}/yr (salary)</div>;
+                    if (pt === 'commission') return <div className="font-medium text-pink-300">Commission only</div>;
+                    if (pt === 'none') return <div className="font-medium text-gray-400">No paychecks</div>;
+                    return <div className="font-medium">${(userData.hourly_rate ?? 0).toFixed(2)}/hr</div>;
+                  })()}
+                </div>
+                <div>
+                  <span className="text-xs text-gray-400 block">Tax Classification</span>
+                  <div className="font-medium">{userData.tax_classification || '1099'}</div>
+                </div>
 
                 {userData.companies?.lanforge?.active && (
                   <div className="border-l-2 border-indigo-500 pl-3 py-1 my-2 bg-gray-900/30 rounded-r">
@@ -261,6 +274,8 @@ export default function AdminUser() {
               </div>
             )}
           </div>
+
+          <PaySchedule userId={id} user={userData} onSaved={fetchUserData} />
 
           <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-4 flex items-center"><Clock size={18} className="mr-2 text-indigo-500"/> Add Time</h3>
