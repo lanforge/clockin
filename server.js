@@ -1658,34 +1658,39 @@ app.delete('/api/announcements/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// Sales goal: build the orders-API query for a given goal config
+// Sales goal: build the pcs-sold report query (from/to) for a given goal config.
+// Date-only values are widened by the report API to cover the whole local day.
 function buildOrdersQuery(goal) {
   const kind = goal.period_kind || 'month';
-  const now = new Date();
+  const day = (d) => moment(d).format('YYYY-MM-DD');
+  let from;
+  let to;
   if (kind === 'month') {
-    return `year=${now.getUTCFullYear()}&month=${now.getUTCMonth() + 1}`;
-  }
-  if (kind === 'year') {
-    const y = now.getUTCFullYear();
-    return `start=${y}-01-01&end=${y}-12-31`;
-  }
-  if (kind === 'days') {
+    from = day(moment().startOf('month'));
+    to = day(moment());
+  } else if (kind === 'year') {
+    from = day(moment().startOf('year'));
+    to = day(moment().endOf('year'));
+  } else if (kind === 'days') {
+    // Rolling window, so send exact timestamps rather than whole days.
     const days = Math.max(1, Math.floor(goal.period_days || 30));
-    return `days=${days}`;
-  }
-  if (kind === 'range') {
-    const fmt = (d) => new Date(d).toISOString().slice(0, 10);
+    from = moment().subtract(days, 'days').toISOString();
+    to = moment().toISOString();
+  } else if (kind === 'range') {
     if (!goal.period_start || !goal.period_end) return null;
-    return `start=${fmt(goal.period_start)}&end=${fmt(goal.period_end)}`;
+    from = day(goal.period_start);
+    to = day(goal.period_end);
+  } else {
+    return null;
   }
-  return null;
+  return new URLSearchParams({ from, to }).toString();
 }
 
 const ordersCountCache = new Map(); // query -> { count, fetched_at }
 const ORDERS_CACHE_TTL_MS = 30 * 1000;
 
-async function fetchDeliveredCount(query) {
-  const baseUrl = process.env.LANFORGE_ORDERS_API_URL || 'http://localhost:5001/api';
+async function fetchPcsSoldCount(query) {
+  const baseUrl = process.env.LANFORGE_ORDERS_API_URL || 'https://api.lanforge.co/api';
   const apiKey = process.env.LANFORGE_ORDERS_API_KEY;
   if (!apiKey) throw new Error('LANFORGE_ORDERS_API_KEY is not configured');
   if (!query) throw new Error('Missing timeframe configuration');
@@ -1698,12 +1703,12 @@ async function fetchDeliveredCount(query) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   try {
-    const url = `${baseUrl.replace(/\/+$/, '')}/orders/delivered-count?${query}`;
-    const r = await fetch(url, { headers: { 'X-API-Key': apiKey }, signal: controller.signal });
+    const url = `${baseUrl.replace(/\/+$/, '')}/admin/reports/pcs-sold?${query}`;
+    const r = await fetch(url, { headers: { 'x-api-key': apiKey }, signal: controller.signal });
     if (!r.ok) throw new Error(`Orders API returned ${r.status}`);
-    const text = await r.text();
-    const count = parseInt(String(text).trim(), 10);
-    if (!Number.isFinite(count)) throw new Error('Orders API returned non-numeric body');
+    const body = await r.json();
+    const count = Number(body?.pcsSold);
+    if (!Number.isFinite(count)) throw new Error('Orders API returned no pcsSold count');
     ordersCountCache.set(query, { count, fetched_at: Date.now() });
     return count;
   } finally {
@@ -1810,7 +1815,7 @@ app.get('/api/sales-goal', requireAuth, async (req, res) => {
     let fetchedAt = goal.last_fetched_at;
     let fetchError = '';
     try {
-      liveCount = await fetchDeliveredCount(query);
+      liveCount = await fetchPcsSoldCount(query);
       fetchedAt = new Date();
       goal.last_fetched_count = liveCount;
       goal.last_fetched_at = fetchedAt;
