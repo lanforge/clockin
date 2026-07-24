@@ -3461,7 +3461,6 @@ app.put('/api/admin/contract-templates/:id', requireAdmin, async (req, res) => {
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
 
     const { name, description, body, doc_type, send_email, active } = req.body;
-    const bodyChanged = body !== undefined && body !== tpl.body;
 
     if (name !== undefined) tpl.name = name;
     if (description !== undefined) tpl.description = description;
@@ -3472,11 +3471,10 @@ app.put('/api/admin/contract-templates/:id', requireAdmin, async (req, res) => {
     tpl.fields = contractTpl.detectPlaceholders(tpl.body).map((p) => ({ name: p }));
     tpl.updated_at = new Date();
 
-    // Rebuild the DocuSeal template when the body changes (or was never built).
-    if (bodyChanged || !tpl.docuseal_template_id) {
-      if (!requireDocuseal(res)) return;
-      await syncDocusealTemplate(tpl);
-    }
+    // Always republish to DocuSeal on save so the hosted template stays in sync
+    // with the current body and field set.
+    if (!requireDocuseal(res)) return;
+    await syncDocusealTemplate(tpl);
     await tpl.save();
     res.json({ success: true, template: tpl });
   } catch (err) {

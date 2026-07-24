@@ -61,40 +61,50 @@ function bodyToDocusealHtml(body) {
 
   let html = blocks.filter(Boolean).join('\n');
 
-  // Ensure there is a signer signature + date field.
-  if (!/type\s*=\s*signature/i.test(normalized)) {
-    html += '\n<p style="margin-top:40px">Signature: {{Signature;type=signature;role=First Party;required=true}}</p>';
-    html += '\n<p>Date: {{Date Signed;type=date;role=First Party;required=true}}</p>';
+  // The /templates/html endpoint parses fields from custom HTML elements
+  // (<text-field>, <signature-field>, <date-field>), NOT {{ }} text tags.
+  // Ensure a signature + date field exists if the author didn't add one.
+  if (!/<signature-field/i.test(html)) {
+    html += `\n<p style="margin-top:40px">Signature: <signature-field name="Signature" role="First Party" required="true" style="width: 240px; height: 60px; display: inline-block"></signature-field></p>`;
+    html += `\n<p>Date: <date-field name="Date Signed" role="First Party" required="true" style="width: 160px; height: 20px; display: inline-block; margin-bottom: -4px"></date-field></p>`;
   }
 
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111;padding:24px;}h1,h2,h3{margin:0 0 12px;}p{margin:0 0 12px;}hr{border:none;border-top:1px solid #ccc;margin:24px 0;}</style></head><body>${html}</body></html>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111;padding:24px;}h1,h2,h3{margin:0 0 12px;}p{margin:0 0 12px;}hr{border:none;border-top:1px solid #ccc;margin:24px 0;}text-field,date-field,signature-field{border-bottom:1px solid #888;}</style></head><body>${html}</body></html>`;
 }
 
-// Inline transforms operating on an already plain text line.
-function inline(text) {
-  // Split around placeholders so we escape prose but keep {{tags}} intact.
-  const parts = [];
-  let last = 0;
-  let m;
-  PLACEHOLDER_RE.lastIndex = 0;
-  while ((m = PLACEHOLDER_RE.exec(text)) !== null) {
-    if (m.index > last) parts.push({ t: 'text', v: text.slice(last, m.index) });
-    parts.push({ t: 'tag', v: m[1] });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push({ t: 'text', v: text.slice(last) });
+function attrEscape(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
-  return parts
-    .map((p) => {
-      if (p.t === 'tag') {
-        // Preserve any DocuSeal modifiers the author wrote; else a plain field.
-        return `{{${p.v.trim()}}}`;
-      }
-      let s = escapeHtml(p.v);
-      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      return s;
-    })
-    .join('');
+// Emit the DocuSeal field element for a placeholder. A field named "Signature"
+// becomes a signature field; everything else is a fillable text field that we
+// pre-fill (and lock) at submission time by matching on `name`.
+function fieldElement(rawName) {
+  const name = String(rawName).split(';')[0].trim();
+  const key = name.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const nameAttr = attrEscape(name);
+  if (key === 'signature' || key === 'sign' || key === 'signhere') {
+    return `<signature-field name="${nameAttr}" role="First Party" required="true" style="width: 240px; height: 60px; display: inline-block"></signature-field>`;
+  }
+  return `<text-field name="${nameAttr}" role="First Party" required="false" preferences="{}" style="width: 260px; height: 20px; display: inline-block; margin-bottom: -4px"></text-field>`;
+}
+
+// Inline transforms for one plain-text line. Placeholders are protected from
+// HTML-escaping/bold, then swapped for DocuSeal field elements at the end so
+// that markup like **{Field}** wraps the field in <strong> correctly.
+function inline(text) {
+  const tokens = [];
+  const SENT = '';
+  const tokenized = String(text).replace(PLACEHOLDER_RE, (m, inner) => {
+    const idx = tokens.length;
+    tokens.push(inner);
+    return `${SENT}${idx}${SENT}`;
+  });
+
+  let s = escapeHtml(tokenized);
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(new RegExp(`${SENT}(\\d+)${SENT}`, 'g'), (m, i) => fieldElement(tokens[Number(i)]));
+  return s;
 }
 
 function normalizeKey(name) {
