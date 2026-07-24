@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Link } from 'react-router-dom';
-import { Users, Megaphone, HelpCircle, UserPlus, Plus, Settings, AlertCircle, Edit, Trash2, Key, CheckSquare, Video, UserX, Target, DollarSign } from 'lucide-react';
+import { Users, Megaphone, HelpCircle, UserPlus, Plus, Settings, AlertCircle, Edit, Trash2, Key, CheckSquare, Video, UserX, Target, DollarSign, FileText } from 'lucide-react';
 import moment from 'moment';
 import CustomModal from '../components/CustomModal';
 import CustomSelect from '../components/CustomSelect';
@@ -9,6 +9,7 @@ import CustomCheckbox from '../components/CustomCheckbox';
 import AdminTasks from '../components/AdminTasks';
 import AdminMeetings from '../components/AdminMeetings';
 import AdminPaychecks from '../components/AdminPaychecks';
+import AdminContractTemplates from '../components/AdminContractTemplates';
 import { useAuth } from '../contexts/AuthContext';
 
 export default function AdminPanel() {
@@ -479,6 +480,15 @@ export default function AdminPanel() {
             <DollarSign className="mr-2" size={18} />
             Paychecks
           </button>
+          <button
+            onClick={() => setActiveTab('contracts')}
+            className={`flex items-center px-3 sm:px-6 py-3 sm:py-4 text-xs sm:text-sm font-medium whitespace-nowrap transition-colors ${
+              activeTab === 'contracts' ? 'border-b-2 border-indigo-600 text-indigo-600 bg-indigo-900/50' : 'text-gray-400 hover:bg-gray-900'
+            }`}
+          >
+            <FileText className="mr-2" size={18} />
+            Contracts
+          </button>
         </div>
 
         <div className="p-4 sm:p-6">
@@ -884,6 +894,10 @@ export default function AdminPanel() {
 
           {activeTab === 'paychecks' && (
             <AdminPaychecks users={users} onError={setError} />
+          )}
+
+          {activeTab === 'contracts' && (
+            <AdminContractTemplates onError={setError} />
           )}
 
           {activeTab === 'sales-goal' && canSeeSalesGoal && (

@@ -8,6 +8,7 @@ import CustomSelect from '../components/CustomSelect';
 import CustomCheckbox from '../components/CustomCheckbox';
 import CustomDatePicker from '../components/CustomDatePicker';
 import PaySchedule from '../components/PaySchedule';
+import UserContracts from '../components/UserContracts';
 
 export default function AdminUser() {
   const { id } = useParams();
@@ -64,7 +65,14 @@ export default function AdminUser() {
         email: editForm.email,
         role: editForm.role,
         hourly_rate: editForm.hourly_rate,
-        companies: editForm.companies
+        companies: editForm.companies,
+        legal_name: editForm.legal_name || '',
+        phone: editForm.phone || '',
+        start_date: editForm.start_date || '',
+        address: editForm.address || {},
+        // Only send PII when the admin typed a new value; blank leaves it unchanged.
+        ...(editForm._ssn_new ? { ssn: editForm._ssn_new } : {}),
+        ...(editForm._ein_new ? { ein: editForm._ein_new } : {})
       });
       if (res.data.success) {
         setUserData(res.data.user);
@@ -165,6 +173,43 @@ export default function AdminUser() {
                   <label className="text-xs text-gray-400">Email</label>
                   <input type="email" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.email || ''} onChange={e => setEditForm({...editForm, email: e.target.value})} />
                 </div>
+
+                {/* Contract profile fields */}
+                <div className="border-t border-gray-600 pt-3 mt-1 space-y-3">
+                  <div className="text-xs font-bold text-gray-300">Contract Details</div>
+                  <div>
+                    <label className="text-xs text-gray-400">Legal Name (as it appears on contracts)</label>
+                    <input type="text" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.legal_name || ''} onChange={e => setEditForm({...editForm, legal_name: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400">Phone</label>
+                    <input type="text" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.phone || ''} onChange={e => setEditForm({...editForm, phone: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400">Start Date</label>
+                    <CustomDatePicker name="start_date" value={editForm.start_date ? moment(editForm.start_date).format('YYYY-MM-DD') : ''} onChange={e => setEditForm({...editForm, start_date: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400">Address</label>
+                    <input type="text" placeholder="Street address" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white mb-1" value={editForm.address?.line1 || ''} onChange={e => setEditForm({...editForm, address: {...editForm.address, line1: e.target.value}})} />
+                    <input type="text" placeholder="Apt, suite (optional)" className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white mb-1" value={editForm.address?.line2 || ''} onChange={e => setEditForm({...editForm, address: {...editForm.address, line2: e.target.value}})} />
+                    <div className="flex gap-1">
+                      <input type="text" placeholder="City" className="flex-1 border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.address?.city || ''} onChange={e => setEditForm({...editForm, address: {...editForm.address, city: e.target.value}})} />
+                      <input type="text" placeholder="ST" className="w-14 border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.address?.state || ''} onChange={e => setEditForm({...editForm, address: {...editForm.address, state: e.target.value}})} />
+                      <input type="text" placeholder="ZIP" className="w-20 border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm.address?.zip || ''} onChange={e => setEditForm({...editForm, address: {...editForm.address, zip: e.target.value}})} />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400">SSN {editForm.has_ssn && <span className="text-gray-500">(stored: {editForm.ssn_masked})</span>}</label>
+                    <input type="text" autoComplete="off" placeholder={editForm.has_ssn ? 'Enter to replace' : 'Not set'} className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm._ssn_new || ''} onChange={e => setEditForm({...editForm, _ssn_new: e.target.value})} />
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-400">EIN {editForm.has_ein && <span className="text-gray-500">(stored: {editForm.ein_masked})</span>}</label>
+                    <input type="text" autoComplete="off" placeholder={editForm.has_ein ? 'Enter to replace' : 'Not set'} className="w-full border rounded p-1 text-sm bg-gray-800 border-gray-600 text-white" value={editForm._ein_new || ''} onChange={e => setEditForm({...editForm, _ein_new: e.target.value})} />
+                  </div>
+                  <div className="text-[11px] text-gray-500 italic">SSN/EIN are encrypted at rest and shown masked.</div>
+                </div>
+
                 <div className="text-xs text-gray-400 italic border-l-2 border-gray-600 pl-3 py-1">
                   Pay rate and tax classification are managed in the Pay Schedule card below.
                 </div>
@@ -245,6 +290,16 @@ export default function AdminUser() {
                   <div className="font-medium">{userData.tax_classification || '1099'}</div>
                 </div>
 
+                {userData.legal_name && <div><span className="text-xs text-gray-400 block">Legal Name</span><div>{userData.legal_name}</div></div>}
+                {userData.phone && <div><span className="text-xs text-gray-400 block">Phone</span><div>{userData.phone}</div></div>}
+                {userData.start_date && <div><span className="text-xs text-gray-400 block">Start Date</span><div>{moment(userData.start_date).format('ll')}</div></div>}
+                {userData.address?.line1 && (
+                  <div><span className="text-xs text-gray-400 block">Address</span><div className="text-sm">{[userData.address.line1, userData.address.line2, [userData.address.city, userData.address.state, userData.address.zip].filter(Boolean).join(', ')].filter(Boolean).join(', ')}</div></div>
+                )}
+                {(userData.has_ssn || userData.has_ein) && (
+                  <div><span className="text-xs text-gray-400 block">Tax ID on file</span><div className="text-sm">{userData.has_ssn && `SSN ${userData.ssn_masked}`}{userData.has_ssn && userData.has_ein && ' · '}{userData.has_ein && `EIN ${userData.ein_masked}`}</div></div>
+                )}
+
                 {userData.companies?.lanforge?.active && (
                   <div className="border-l-2 border-indigo-500 pl-3 py-1 my-2 bg-gray-900/30 rounded-r">
                     <div className="text-xs font-bold text-indigo-400 mb-1">LANForge</div>
@@ -276,6 +331,8 @@ export default function AdminUser() {
           </div>
 
           <PaySchedule userId={id} user={userData} onSaved={fetchUserData} />
+
+          <UserContracts userId={id} employeeName={userData.legal_name || userData.username} onError={setError} />
 
           <div className="bg-gray-800 p-4 sm:p-6 rounded-xl shadow-sm border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-4 flex items-center"><Clock size={18} className="mr-2 text-indigo-500"/> Add Time</h3>

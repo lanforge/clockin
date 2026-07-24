@@ -11,6 +11,9 @@ const rateLimit = require('express-rate-limit');
 const compression = require('compression');
 const cron = require('node-cron');
 const { Resend } = require('resend');
+const docuseal = require('./utils/docuseal');
+const pii = require('./utils/crypto');
+const contractTpl = require('./utils/contractTemplate');
 
 const resend = process.env.RESEND_KEY ? new Resend(process.env.RESEND_KEY) : null;
 
@@ -106,7 +109,22 @@ const userSchema = new mongoose.Schema({
     default: 'active'
   },
   status_changed_at: { type: Date },
-  status_note: { type: String, default: '' }
+  status_note: { type: String, default: '' },
+  // Contract / onboarding profile fields
+  legal_name: { type: String, default: '' },
+  phone: { type: String, default: '' },
+  start_date: { type: Date },
+  address: {
+    line1: { type: String, default: '' },
+    line2: { type: String, default: '' },
+    city: { type: String, default: '' },
+    state: { type: String, default: '' },
+    zip: { type: String, default: '' }
+  },
+  // Sensitive PII, stored AES-256-GCM encrypted (see utils/crypto.js). Never
+  // returned to the client in raw form.
+  ssn_enc: { type: String, default: '' },
+  ein_enc: { type: String, default: '' }
 });
 
 const timeEntrySchema = new mongoose.Schema({
@@ -257,8 +275,59 @@ const paycheckSchema = new mongoose.Schema({
 });
 paycheckSchema.index({ user_id: 1, period_key: 1 }, { unique: true });
 
+const contractFieldSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  mapping: { type: String, default: '' } // informational: which profile field it maps to
+}, { _id: false });
+
+const contractTemplateSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, default: '' },
+  body: { type: String, default: '' }, // author's markdown/text source with {placeholders}
+  doc_type: { type: String, enum: ['W2', '1099', 'other'], default: 'other' },
+  fields: { type: [contractFieldSchema], default: [] },
+  docuseal_template_id: { type: Number },
+  active: { type: Boolean, default: true },
+  send_email: { type: Boolean, default: true },
+  created_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+
+const contractSubmissionSchema = new mongoose.Schema({
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  template_id: { type: mongoose.Schema.Types.ObjectId, ref: 'ContractTemplate' },
+  template_name: { type: String, default: '' },
+  doc_type: { type: String, enum: ['W2', '1099', 'other'], default: 'other' },
+  docuseal_template_id: { type: Number },
+  docuseal_submission_id: { type: Number, index: true },
+  docuseal_submitter_id: { type: Number, index: true },
+  slug: { type: String, default: '' },
+  embed_src: { type: String, default: '' }, // signing URL for the employee
+  // Snapshot of the values that were sent (sensitive fields redacted before save)
+  field_values: { type: mongoose.Schema.Types.Mixed, default: {} },
+  status: {
+    type: String,
+    enum: ['sent', 'viewed', 'completed', 'declined', 'expired'],
+    default: 'sent',
+    index: true
+  },
+  sent_at: { type: Date, default: Date.now },
+  viewed_at: { type: Date },
+  completed_at: { type: Date },
+  declined_at: { type: Date },
+  signed_document_url: { type: String, default: '' },
+  audit_log_url: { type: String, default: '' },
+  sent_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  created_at: { type: Date, default: Date.now },
+  updated_at: { type: Date, default: Date.now }
+});
+contractSubmissionSchema.index({ user_id: 1, created_at: -1 });
+
 // Create models
 const User = mongoose.model('User', userSchema);
+const ContractTemplate = mongoose.model('ContractTemplate', contractTemplateSchema);
+const ContractSubmission = mongoose.model('ContractSubmission', contractSubmissionSchema);
 const TimeEntry = mongoose.model('TimeEntry', timeEntrySchema);
 const HelpInquiry = mongoose.model('HelpInquiry', helpInquirySchema);
 const Announcement = mongoose.model('Announcement', announcementSchema);
@@ -267,6 +336,90 @@ const Meeting = mongoose.model('Meeting', meetingSchema);
 const SalesGoal = mongoose.model('SalesGoal', salesGoalSchema);
 const Paycheck = mongoose.model('Paycheck', paycheckSchema);
 const PayRate = mongoose.model('PayRate', payRateSchema);
+
+// --- Contract / PII helpers -------------------------------------------------
+
+// Strip encrypted PII from a user object before sending it to the client and
+// attach masked, display-safe versions. Accepts a Mongoose doc or plain object.
+function publicUser(userDoc) {
+  if (!userDoc) return userDoc;
+  const u = typeof userDoc.toObject === 'function' ? userDoc.toObject() : { ...userDoc };
+  const ssn = pii.decrypt(u.ssn_enc);
+  const ein = pii.decrypt(u.ein_enc);
+  delete u.ssn_enc;
+  delete u.ein_enc;
+  delete u.password;
+  delete u.temporary_password;
+  u.has_ssn = !!ssn;
+  u.has_ein = !!ein;
+  u.ssn_masked = ssn ? pii.mask(ssn) : '';
+  u.ein_masked = ein ? pii.mask(ein) : '';
+  return u;
+}
+
+// The doc_type an employee is currently required to have signed.
+function requiredDocType(user) {
+  return user.tax_classification === 'W2' ? 'W2' : '1099';
+}
+
+// Given a user's submissions, decide whether they still owe a signature for
+// their current tax classification.
+function computeSigningState(user, submissions) {
+  const required = requiredDocType(user);
+  const completedForRequired = submissions.some(
+    (s) => s.doc_type === required && s.status === 'completed'
+  );
+  const pending = submissions.find(
+    (s) => s.doc_type === required && ['sent', 'viewed'].includes(s.status)
+  );
+  return {
+    requiredDocType: required,
+    needsSigning: !completedForRequired,
+    pendingSubmission: pending || null
+  };
+}
+
+// Build the context used to auto-fill contract fields from a profile.
+function prefillContext(user) {
+  return {
+    user,
+    ssn: pii.decrypt(user.ssn_enc) || '',
+    ein: pii.decrypt(user.ein_enc) || '',
+    today: moment().format('MM/DD/YYYY')
+  };
+}
+
+// Update a ContractSubmission from a DocuSeal submission payload.
+async function applyDocusealStatus(submissionDoc, dsSubmission) {
+  if (!dsSubmission) return submissionDoc;
+  const submitter = Array.isArray(dsSubmission.submitters)
+    ? dsSubmission.submitters.find((s) => s.id === submissionDoc.docuseal_submitter_id) || dsSubmission.submitters[0]
+    : null;
+
+  const rawStatus = (submitter && submitter.status) || dsSubmission.status;
+  const status = docuseal.normalizeStatus(rawStatus);
+
+  submissionDoc.status = status;
+  if (submitter) {
+    if (submitter.opened_at && !submissionDoc.viewed_at) submissionDoc.viewed_at = new Date(submitter.opened_at);
+    if (submitter.completed_at) submissionDoc.completed_at = new Date(submitter.completed_at);
+    if (submitter.declined_at) submissionDoc.declined_at = new Date(submitter.declined_at);
+  }
+  if (status === 'viewed' && !submissionDoc.viewed_at) submissionDoc.viewed_at = new Date();
+  if (status === 'completed' && !submissionDoc.completed_at) submissionDoc.completed_at = new Date();
+  if (status === 'declined' && !submissionDoc.declined_at) submissionDoc.declined_at = new Date();
+
+  if (dsSubmission.audit_log_url) submissionDoc.audit_log_url = dsSubmission.audit_log_url;
+  const doc = Array.isArray(dsSubmission.documents) ? dsSubmission.documents[0] : null;
+  if (dsSubmission.combined_document_url) {
+    submissionDoc.signed_document_url = dsSubmission.combined_document_url;
+  } else if (doc && doc.url) {
+    submissionDoc.signed_document_url = doc.url;
+  }
+  submissionDoc.updated_at = new Date();
+  await submissionDoc.save();
+  return submissionDoc;
+}
 
 // Middleware
 app.use(express.json());
@@ -940,7 +1093,7 @@ app.get('/api/admin/user/:id', requireAdmin, async (req, res) => {
     res.json({
       success: true,
       data: {
-        userData,
+        userData: publicUser(userData),
         timeEntries,
         yearPayPeriods
       }
@@ -986,7 +1139,8 @@ app.post('/api/admin/remove-time', requireAdmin, async (req, res) => {
 // User management routes
 app.post('/api/admin/edit-user', requireAdmin, async (req, res) => {
   try {
-    const { userId, username, email, role, hourly_rate, companies, pay_type, salary_amount, tax_classification, paychecks_start_date } = req.body;
+    const { userId, username, email, role, hourly_rate, companies, pay_type, salary_amount, tax_classification, paychecks_start_date,
+      legal_name, phone, start_date, address, ssn, ein } = req.body;
 
     const updateData = {
       username,
@@ -994,6 +1148,37 @@ app.post('/api/admin/edit-user', requireAdmin, async (req, res) => {
       role,
       hourly_rate: parseFloat(hourly_rate)
     };
+
+    // Contract profile fields
+    if (legal_name !== undefined) updateData.legal_name = legal_name;
+    if (phone !== undefined) updateData.phone = phone;
+    if (start_date !== undefined) {
+      updateData.start_date = start_date ? new Date(start_date) : null;
+    }
+    if (address && typeof address === 'object') {
+      updateData.address = {
+        line1: address.line1 || '',
+        line2: address.line2 || '',
+        city: address.city || '',
+        state: address.state || '',
+        zip: address.zip || ''
+      };
+    }
+    // Sensitive PII: only overwrite when a new plaintext value is provided.
+    // The client sends undefined/'' to leave the existing encrypted value as-is,
+    // or the literal '__CLEAR__' to remove it.
+    if (ssn === '__CLEAR__') {
+      updateData.ssn_enc = '';
+    } else if (ssn) {
+      if (!pii.isConfigured()) return res.status(500).json({ success: false, error: 'CONTRACT_ENC_KEY not configured; cannot store SSN' });
+      updateData.ssn_enc = pii.encrypt(ssn);
+    }
+    if (ein === '__CLEAR__') {
+      updateData.ein_enc = '';
+    } else if (ein) {
+      if (!pii.isConfigured()) return res.status(500).json({ success: false, error: 'CONTRACT_ENC_KEY not configured; cannot store EIN' });
+      updateData.ein_enc = pii.encrypt(ein);
+    }
 
     if (['hourly', 'salary', 'commission', 'none'].includes(pay_type)) {
       updateData.pay_type = pay_type;
@@ -1031,7 +1216,7 @@ app.post('/api/admin/edit-user', requireAdmin, async (req, res) => {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
     
-    res.json({ success: true, user: updatedUser });
+    res.json({ success: true, user: publicUser(updatedUser) });
   } catch (err) {
     console.error('Edit user error:', err);
     res.status(500).json({ success: false, error: 'Failed to update user' });
@@ -3198,6 +3383,299 @@ app.delete('/api/admin/meetings/:id', requireAdmin, async (req, res) => {
 app.get('/logout', (req, res) => {
   req.session.destroy();
   res.redirect('/login');
+});
+
+// ===========================================================================
+// CONTRACTS (DocuSeal)
+// ===========================================================================
+
+function requireDocuseal(res) {
+  if (!docuseal.isConfigured()) {
+    res.status(503).json({ success: false, error: 'DocuSeal is not configured. Set DOCUSEAL_API_KEY.' });
+    return false;
+  }
+  return true;
+}
+
+// Create or recreate the DocuSeal template for a ContractTemplate document.
+async function syncDocusealTemplate(tplDoc) {
+  const html = contractTpl.bodyToDocusealHtml(tplDoc.body);
+  const created = await docuseal.createHtmlTemplate({ name: tplDoc.name, html });
+  tplDoc.docuseal_template_id = created.id;
+  return created;
+}
+
+// List templates
+app.get('/api/admin/contract-templates', requireAdmin, async (req, res) => {
+  try {
+    const templates = await ContractTemplate.find().sort({ created_at: -1 });
+    res.json({
+      success: true,
+      templates,
+      docusealConfigured: docuseal.isConfigured(),
+      encConfigured: pii.isConfigured()
+    });
+  } catch (err) {
+    console.error('List templates error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load templates' });
+  }
+});
+
+// Detect fields for a body without saving (live preview in the editor)
+app.post('/api/admin/contract-templates/detect', requireAdmin, (req, res) => {
+  const { body } = req.body;
+  res.json({ success: true, fields: contractTpl.detectPlaceholders(body || '') });
+});
+
+// Create template
+app.post('/api/admin/contract-templates', requireAdmin, async (req, res) => {
+  try {
+    if (!requireDocuseal(res)) return;
+    const { name, description, body, doc_type, send_email } = req.body;
+    if (!name || !body) {
+      return res.status(400).json({ success: false, error: 'Name and body are required' });
+    }
+    const placeholders = contractTpl.detectPlaceholders(body);
+    const tpl = new ContractTemplate({
+      name,
+      description: description || '',
+      body,
+      doc_type: ['W2', '1099', 'other'].includes(doc_type) ? doc_type : 'other',
+      send_email: send_email !== false,
+      fields: placeholders.map((p) => ({ name: p })),
+      created_by: req.session.userId
+    });
+    await syncDocusealTemplate(tpl);
+    await tpl.save();
+    res.json({ success: true, template: tpl });
+  } catch (err) {
+    console.error('Create template error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to create template' });
+  }
+});
+
+// Update template
+app.put('/api/admin/contract-templates/:id', requireAdmin, async (req, res) => {
+  try {
+    const tpl = await ContractTemplate.findById(req.params.id);
+    if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
+
+    const { name, description, body, doc_type, send_email, active } = req.body;
+    const bodyChanged = body !== undefined && body !== tpl.body;
+
+    if (name !== undefined) tpl.name = name;
+    if (description !== undefined) tpl.description = description;
+    if (body !== undefined) tpl.body = body;
+    if (['W2', '1099', 'other'].includes(doc_type)) tpl.doc_type = doc_type;
+    if (send_email !== undefined) tpl.send_email = !!send_email;
+    if (active !== undefined) tpl.active = !!active;
+    tpl.fields = contractTpl.detectPlaceholders(tpl.body).map((p) => ({ name: p }));
+    tpl.updated_at = new Date();
+
+    // Rebuild the DocuSeal template when the body changes (or was never built).
+    if (bodyChanged || !tpl.docuseal_template_id) {
+      if (!requireDocuseal(res)) return;
+      await syncDocusealTemplate(tpl);
+    }
+    await tpl.save();
+    res.json({ success: true, template: tpl });
+  } catch (err) {
+    console.error('Update template error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to update template' });
+  }
+});
+
+// Delete template (existing submissions are retained; they keep their snapshot)
+app.delete('/api/admin/contract-templates/:id', requireAdmin, async (req, res) => {
+  try {
+    await ContractTemplate.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Delete template error:', err);
+    res.status(500).json({ success: false, error: 'Failed to delete template' });
+  }
+});
+
+// Prefill fields for a given employee + template (feeds the send modal)
+app.get('/api/admin/user/:id/contract-prefill', requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    const tpl = await ContractTemplate.findById(req.query.templateId);
+    if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
+
+    const placeholders = contractTpl.detectPlaceholders(tpl.body);
+    const fields = contractTpl.buildFieldSuggestions(placeholders, prefillContext(user));
+
+    res.json({
+      success: true,
+      fields,
+      template: { _id: tpl._id, name: tpl.name, doc_type: tpl.doc_type, send_email: tpl.send_email },
+      employee: { email: user.email || '', name: user.legal_name || user.username, hasEmail: !!user.email }
+    });
+  } catch (err) {
+    console.error('Prefill error:', err);
+    res.status(500).json({ success: false, error: 'Failed to build prefill' });
+  }
+});
+
+// Send a contract to an employee
+app.post('/api/admin/user/:id/send-contract', requireAdmin, async (req, res) => {
+  try {
+    if (!requireDocuseal(res)) return;
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    if (!user.email) return res.status(400).json({ success: false, error: 'Employee has no email address' });
+
+    const { templateId, fields, email } = req.body;
+    const tpl = await ContractTemplate.findById(templateId);
+    if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
+    if (!tpl.docuseal_template_id) return res.status(400).json({ success: false, error: 'Template is not synced with DocuSeal' });
+
+    // Build prefill dict { fieldName: value } from admin-confirmed field list.
+    const prefill = {};
+    (fields || []).forEach((f) => {
+      if (f && f.name) prefill[f.name] = f.value == null ? '' : String(f.value);
+    });
+
+    const submitterEmail = email || user.email;
+    const result = await docuseal.createSubmission({
+      templateId: tpl.docuseal_template_id,
+      submitter: { email: submitterEmail, name: user.legal_name || user.username, role: 'First Party' },
+      prefill,
+      sendEmail: tpl.send_email
+    });
+    const submitter = Array.isArray(result) ? result[0] : result;
+
+    // Snapshot values, redacting anything sensitive.
+    const redacted = {};
+    (fields || []).forEach((f) => {
+      if (!f || !f.name) return;
+      redacted[f.name] = f.sensitive ? pii.mask(f.value) : (f.value || '');
+    });
+
+    const submission = new ContractSubmission({
+      user_id: user._id,
+      template_id: tpl._id,
+      template_name: tpl.name,
+      doc_type: tpl.doc_type,
+      docuseal_template_id: tpl.docuseal_template_id,
+      docuseal_submission_id: submitter.submission_id,
+      docuseal_submitter_id: submitter.id,
+      slug: submitter.slug || '',
+      embed_src: submitter.embed_src || '',
+      field_values: redacted,
+      status: docuseal.normalizeStatus(submitter.status),
+      sent_by: req.session.userId
+    });
+    await submission.save();
+
+    res.json({ success: true, submission });
+  } catch (err) {
+    console.error('Send contract error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to send contract' });
+  }
+});
+
+// List a user's contracts + signing state (admin)
+app.get('/api/admin/user/:id/contracts', requireAdmin, async (req, res) => {
+  try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    const submissions = await ContractSubmission.find({ user_id: user._id }).sort({ created_at: -1 });
+    res.json({
+      success: true,
+      submissions,
+      signingState: computeSigningState(user, submissions)
+    });
+  } catch (err) {
+    console.error('List user contracts error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load contracts' });
+  }
+});
+
+// Manually refresh a submission's status from DocuSeal
+app.post('/api/admin/contract-submissions/:id/refresh', requireAdmin, async (req, res) => {
+  try {
+    if (!requireDocuseal(res)) return;
+    const submission = await ContractSubmission.findById(req.params.id);
+    if (!submission) return res.status(404).json({ success: false, error: 'Submission not found' });
+    if (!submission.docuseal_submission_id) return res.status(400).json({ success: false, error: 'No DocuSeal submission id' });
+
+    const ds = await docuseal.getSubmission(submission.docuseal_submission_id);
+    await applyDocusealStatus(submission, ds);
+    res.json({ success: true, submission });
+  } catch (err) {
+    console.error('Refresh submission error:', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to refresh' });
+  }
+});
+
+// DocuSeal webhook receiver (mounted outside /api so it isn't rate-limited or
+// behind the session). Configure this URL in DocuSeal settings.
+app.post('/webhooks/docuseal', async (req, res) => {
+  try {
+    const secret = process.env.DOCUSEAL_WEBHOOK_SECRET;
+    if (secret) {
+      const provided = req.query.secret || req.headers['x-docuseal-secret'];
+      if (provided !== secret) {
+        return res.status(401).json({ success: false, error: 'Invalid webhook secret' });
+      }
+    }
+
+    const { event_type, data } = req.body || {};
+    if (!data) return res.json({ success: true });
+
+    const submissionId = data.submission_id || (String(event_type || '').startsWith('submission') ? data.id : null);
+    const submitterId = data.submission_id ? data.id : null;
+
+    let record = null;
+    if (submissionId) record = await ContractSubmission.findOne({ docuseal_submission_id: submissionId });
+    if (!record && submitterId) record = await ContractSubmission.findOne({ docuseal_submitter_id: submitterId });
+
+    if (record) {
+      // Fetch the authoritative submission state (includes document URLs).
+      try {
+        const ds = await docuseal.getSubmission(record.docuseal_submission_id);
+        await applyDocusealStatus(record, ds);
+      } catch (e) {
+        // Fall back to updating from the webhook payload alone.
+        record.status = docuseal.normalizeStatus(data.status || event_type);
+        record.updated_at = new Date();
+        await record.save();
+      }
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DocuSeal webhook error:', err);
+    res.status(200).json({ success: true }); // Always 200 so DocuSeal doesn't retry-storm.
+  }
+});
+
+// Employee-facing: my contracts + whether I owe a signature
+app.get('/api/my-contracts', requireAuth, async (req, res) => {
+  try {
+    const user = await User.findById(req.session.userId);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    const submissions = await ContractSubmission.find({ user_id: user._id }).sort({ created_at: -1 });
+    const state = computeSigningState(user, submissions);
+    // Only expose what the employee needs.
+    const safe = submissions.map((s) => ({
+      _id: s._id,
+      template_name: s.template_name,
+      doc_type: s.doc_type,
+      status: s.status,
+      embed_src: s.embed_src,
+      sent_at: s.sent_at,
+      viewed_at: s.viewed_at,
+      completed_at: s.completed_at,
+      signed_document_url: s.signed_document_url
+    }));
+    res.json({ success: true, submissions: safe, signingState: state });
+  } catch (err) {
+    console.error('My contracts error:', err);
+    res.status(500).json({ success: false, error: 'Failed to load contracts' });
+  }
 });
 
 // Catch-all route to serve React app
