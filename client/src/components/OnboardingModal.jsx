@@ -51,18 +51,20 @@ export default function OnboardingModal() {
   const toSign = (data?.submissions || []).filter(
     (s) => s.doc_type === requiredType && ['sent', 'viewed'].includes(s.status) && s.embed_src
   );
-  const needsSigning = !!data?.signingState?.needsSigning;
-  const mustSign = needsSigning && toSign.length > 0;
+  // Force signing whenever there is ANY unsigned (sent/viewed) document of the
+  // employee's current required type — even if they've completed a different one
+  // before. This is what makes a re-sent or reclassified document block the app.
+  const mustSign = toSign.length > 0;
   const current = toSign[0] || null;
 
   // Track the signing -> done transition so we can show a one-time thank-you.
   useEffect(() => {
     if (mustSign && !wasSigning) setWasSigning(true);
-    if (wasSigning && !needsSigning) {
+    if (wasSigning && !mustSign) {
       setWasSigning(false);
       setShowThankYou(true);
     }
-  }, [mustSign, needsSigning, wasSigning]);
+  }, [mustSign, wasSigning]);
 
   // Refresh the current submission's status directly from DocuSeal, then reload.
   const refreshCurrent = useCallback(async (showSpinner) => {

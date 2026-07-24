@@ -3641,6 +3641,20 @@ app.get('/api/my-contracts', requireAuth, async (req, res) => {
     const user = await User.findById(req.session.userId);
     if (!user) return res.status(404).json({ success: false, error: 'User not found' });
     const submissions = await ContractSubmission.find({ user_id: user._id }).sort({ created_at: -1 });
+
+    // Opportunistically sync any still-pending submissions from DocuSeal so the
+    // signing state is accurate even if the webhook isn't configured. Bounded by
+    // the (small) number of pending docs; best-effort.
+    if (docuseal.isConfigured()) {
+      const pending = submissions.filter((s) => ['sent', 'viewed'].includes(s.status) && s.docuseal_submission_id);
+      await Promise.allSettled(pending.map(async (s) => {
+        try {
+          const ds = await docuseal.getSubmission(s.docuseal_submission_id);
+          await applyDocusealStatus(s, ds);
+        } catch (e) { /* ignore individual failures */ }
+      }));
+    }
+
     const state = computeSigningState(user, submissions);
     // Only expose what the employee needs.
     const safe = submissions.map((s) => ({
