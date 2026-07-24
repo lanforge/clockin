@@ -4,7 +4,6 @@ import moment from 'moment';
 import { useAuth } from '../contexts/AuthContext';
 import { Clock, AlertCircle, Play, Square, Video, ExternalLink, Check, X as XIcon, HelpCircle, Repeat, Target, Gift, Megaphone } from 'lucide-react';
 import { describeMeetingTime, detectTz } from '../utils/datetime';
-import OnboardingModal from '../components/OnboardingModal';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -189,7 +188,6 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5 max-w-5xl mx-auto">
-      <OnboardingModal />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1">
         <h2 className="text-2xl font-bold text-white">Welcome, {user?.username}</h2>

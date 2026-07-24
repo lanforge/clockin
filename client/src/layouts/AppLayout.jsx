@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { LayoutDashboard, Calendar, BookOpen, Users, Settings, LogOut, Menu, X, ShieldAlert, HelpCircle, CheckSquare, DollarSign } from 'lucide-react';
 import { HandbookContent } from '../components/HandbookContent';
 import CustomCheckbox from '../components/CustomCheckbox';
+import OnboardingModal from '../components/OnboardingModal';
 
 export const AppLayout = () => {
   const { user, logout, checkAuth } = useAuth();
@@ -151,6 +152,9 @@ export const AppLayout = () => {
           onClick={() => setIsSidebarOpen(false)}
         />
       )}
+
+      {/* Forced contract-signing modal (blocks the app until required docs are signed) */}
+      <OnboardingModal />
 
       {/* Handbook Agreement Modal */}
       {showHandbookModal && (

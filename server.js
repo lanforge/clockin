@@ -3661,6 +3661,34 @@ app.get('/api/my-contracts', requireAuth, async (req, res) => {
   }
 });
 
+// Employee-facing: refresh the status of one of MY submissions straight from
+// DocuSeal (used by the signing modal the moment the employee finishes signing,
+// so we don't have to wait for the webhook).
+app.post('/api/my-contracts/:id/refresh', requireAuth, async (req, res) => {
+  try {
+    const submission = await ContractSubmission.findOne({ _id: req.params.id, user_id: req.session.userId });
+    if (!submission) return res.status(404).json({ success: false, error: 'Not found' });
+    if (docuseal.isConfigured() && submission.docuseal_submission_id) {
+      try {
+        const ds = await docuseal.getSubmission(submission.docuseal_submission_id);
+        await applyDocusealStatus(submission, ds);
+      } catch (e) {
+        console.error('my-contract refresh docuseal error:', e.message);
+      }
+    }
+    const user = await User.findById(req.session.userId);
+    const submissions = await ContractSubmission.find({ user_id: req.session.userId }).sort({ created_at: -1 });
+    res.json({
+      success: true,
+      status: submission.status,
+      signingState: computeSigningState(user, submissions)
+    });
+  } catch (err) {
+    console.error('Refresh my contract error:', err);
+    res.status(500).json({ success: false, error: 'Failed to refresh' });
+  }
+});
+
 // Catch-all route to serve React app
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client/dist/index.html'));
