@@ -129,7 +129,7 @@ export default function AdminContractTemplates({ onError }) {
       {!docusealConfigured && (
         <div className="p-4 bg-yellow-900/40 border border-yellow-800 text-yellow-200 rounded-lg flex items-start gap-2 text-sm">
           <AlertCircle size={18} className="mt-0.5 flex-shrink-0" />
-          <span>DocuSeal is not configured. Set <code>DOCUSEAL_API_KEY</code> on the server to create and send contracts.</span>
+          <span>DocuSeal is not configured. You can still write templates, but set <code>DOCUSEAL_API_KEY</code> on the server before sending contracts for signature.</span>
         </div>
       )}
       {!encConfigured && (
@@ -187,7 +187,7 @@ export default function AdminContractTemplates({ onError }) {
 
           <div className="flex justify-end gap-3 pt-2">
             <button onClick={closeForm} className="px-4 py-2 border border-gray-600 text-gray-200 text-sm rounded-md hover:bg-gray-800">Cancel</button>
-            <button onClick={handleSave} disabled={saving || !docusealConfigured} className="flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50">
+            <button onClick={handleSave} disabled={saving} className="flex items-center px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50">
               <Save size={16} className="mr-2" /> {saving ? 'Saving…' : 'Save Template'}
             </button>
           </div>
@@ -207,7 +207,6 @@ export default function AdminContractTemplates({ onError }) {
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-white">{t.name}</span>
                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${t.doc_type === 'W2' ? 'bg-sky-900/50 text-sky-300' : t.doc_type === '1099' ? 'bg-purple-900/50 text-purple-300' : 'bg-gray-700 text-gray-300'}`}>{t.doc_type}</span>
-                {!t.docuseal_template_id && <span className="px-2 py-0.5 rounded text-xs bg-yellow-900/50 text-yellow-300">not synced</span>}
               </div>
               {t.description && <div className="text-sm text-gray-400 mt-1">{t.description}</div>}
               <div className="text-xs text-gray-500 mt-1">{(t.fields || []).length} field{(t.fields || []).length === 1 ? '' : 's'}: {(t.fields || []).map(f => f.name).join(', ')}</div>

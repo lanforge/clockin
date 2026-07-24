@@ -37,62 +37,90 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;');
 }
 
-// Minimal markdown -> HTML: headings (#), bold (**), horizontal rule (---),
-// paragraphs, and line breaks. Placeholder braces are normalised to DocuSeal's
-// {{ }} tags. Signature + date fields are appended if the author omitted them.
-function bodyToDocusealHtml(body) {
+function attrEscape(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function isSignatureName(name) {
+  const key = String(name).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return key === 'signature' || key === 'sign' || key === 'signhere';
+}
+
+function signatureFieldElement(rawName) {
+  const name = attrEscape(String(rawName).split(';')[0].trim());
+  return `<signature-field name="${name}" role="First Party" required="true" style="width: 240px; height: 60px; display: inline-block"></signature-field>`;
+}
+
+function textFieldElement(rawName) {
+  const name = attrEscape(String(rawName).split(';')[0].trim());
+  return `<text-field name="${name}" role="First Party" required="false" preferences="{}" style="width: 220px; height: 20px; display: inline-block; margin-bottom: -4px"></text-field>`;
+}
+
+// Template mode: every placeholder becomes an (empty) fillable field.
+function fieldElement(rawName) {
+  return isSignatureName(String(rawName).split(';')[0].trim())
+    ? signatureFieldElement(rawName)
+    : textFieldElement(rawName);
+}
+
+function wrapHtml(html) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111;padding:24px;}h1,h2,h3{margin:0 0 12px;}p{margin:0 0 12px;}hr{border:none;border-top:1px solid #ccc;margin:24px 0;}text-field,date-field,signature-field{border-bottom:1px solid #888;}</style></head><body>${html}</body></html>`;
+}
+
+// Render the body to HTML. `fieldRenderer(rawName)` decides what each {placeholder}
+// becomes (a fillable field, or baked-in text). A signature + date field are
+// appended if none are present.
+function renderBody(body, fieldRenderer) {
   const normalized = String(body || '').replace(/\r\n/g, '\n');
 
   const blocks = normalized.split(/\n{2,}/).map((block) => {
     const trimmed = block.trim();
     if (!trimmed) return '';
-
     if (/^---+$/.test(trimmed)) return '<hr />';
-
     const heading = trimmed.match(/^(#{1,3})\s+(.*)$/);
     if (heading) {
       const level = heading[1].length;
-      return `<h${level}>${inline(heading[2])}</h${level}>`;
+      return `<h${level}>${inline(heading[2], fieldRenderer)}</h${level}>`;
     }
-
-    const lines = trimmed.split('\n').map((l) => inline(l));
+    const lines = trimmed.split('\n').map((l) => inline(l, fieldRenderer));
     return `<p>${lines.join('<br />')}</p>`;
   });
 
   let html = blocks.filter(Boolean).join('\n');
 
-  // The /templates/html endpoint parses fields from custom HTML elements
-  // (<text-field>, <signature-field>, <date-field>), NOT {{ }} text tags.
-  // Ensure a signature + date field exists if the author didn't add one.
   if (!/<signature-field/i.test(html)) {
     html += `\n<p style="margin-top:40px">Signature: <signature-field name="Signature" role="First Party" required="true" style="width: 240px; height: 60px; display: inline-block"></signature-field></p>`;
     html += `\n<p>Date: <date-field name="Date Signed" role="First Party" required="true" style="width: 160px; height: 20px; display: inline-block; margin-bottom: -4px"></date-field></p>`;
   }
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" /><style>body{font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:#111;padding:24px;}h1,h2,h3{margin:0 0 12px;}p{margin:0 0 12px;}hr{border:none;border-top:1px solid #ccc;margin:24px 0;}text-field,date-field,signature-field{border-bottom:1px solid #888;}</style></head><body>${html}</body></html>`;
+  return wrapHtml(html);
 }
 
-function attrEscape(str) {
-  return String(str).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Template preview: all placeholders rendered as empty fields.
+function bodyToDocusealHtml(body) {
+  return renderBody(body, fieldElement);
 }
 
-// Emit the DocuSeal field element for a placeholder. A field named "Signature"
-// becomes a signature field; everything else is a fillable text field that we
-// pre-fill (and lock) at submission time by matching on `name`.
-function fieldElement(rawName) {
-  const name = String(rawName).split(';')[0].trim();
-  const key = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const nameAttr = attrEscape(name);
-  if (key === 'signature' || key === 'sign' || key === 'signhere') {
-    return `<signature-field name="${nameAttr}" role="First Party" required="true" style="width: 240px; height: 60px; display: inline-block"></signature-field>`;
-  }
-  return `<text-field name="${nameAttr}" role="First Party" required="false" preferences="{}" style="width: 260px; height: 20px; display: inline-block; margin-bottom: -4px"></text-field>`;
+// Submission mode: placeholders with a confirmed value are baked in as text
+// (no oversized field box); blanks stay as fillable fields for the employee;
+// the signature/date remain fields. `values` maps field name -> value.
+function bodyToSubmissionHtml(body, values) {
+  const vals = values || {};
+  const renderer = (rawName) => {
+    const name = String(rawName).split(';')[0].trim();
+    if (isSignatureName(name)) return signatureFieldElement(name);
+    const v = vals[name];
+    if (v !== undefined && v !== null && String(v).trim() !== '') {
+      return `<strong>${escapeHtml(String(v))}</strong>`;
+    }
+    return textFieldElement(name);
+  };
+  return renderBody(body, renderer);
 }
 
 // Inline transforms for one plain-text line. Placeholders are protected from
 // HTML-escaping/bold, then swapped for DocuSeal field elements at the end so
 // that markup like **{Field}** wraps the field in <strong> correctly.
-function inline(text) {
+function inline(text, fieldRenderer) {
   const tokens = [];
   const SENT = '';
   const tokenized = String(text).replace(PLACEHOLDER_RE, (m, inner) => {
@@ -103,7 +131,7 @@ function inline(text) {
 
   let s = escapeHtml(tokenized);
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(new RegExp(`${SENT}(\\d+)${SENT}`, 'g'), (m, i) => fieldElement(tokens[Number(i)]));
+  s = s.replace(new RegExp(`${SENT}(\\d+)${SENT}`, 'g'), (m, i) => fieldRenderer(tokens[Number(i)]));
   return s;
 }
 
@@ -216,6 +244,7 @@ function buildFieldSuggestions(placeholders, ctx) {
 module.exports = {
   detectPlaceholders,
   bodyToDocusealHtml,
+  bodyToSubmissionHtml,
   buildFieldSuggestions,
   suggestValue,
   normalizeKey

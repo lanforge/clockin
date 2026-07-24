@@ -70,6 +70,34 @@ async function createSubmission({ templateId, submitter, prefill = {}, sendEmail
   return request('POST', '/submissions', body);
 }
 
+// Create a one-off submission directly from inline HTML (no reusable template).
+// Values are already baked into the HTML, so no prefill is needed here.
+// Returns a normalized object: { submission_id, submitter_id, slug, embed_src, status }.
+async function createSubmissionFromHtml({ name, html, submitter, sendEmail = true }) {
+  const body = {
+    send_email: sendEmail,
+    submitters: [
+      {
+        role: submitter.role || 'First Party',
+        email: submitter.email,
+        name: submitter.name || undefined
+      }
+    ],
+    documents: [{ name: name || 'Agreement', html }]
+  };
+  const res = await request('POST', '/submissions/html', body);
+  // /submissions/html returns a submission object with a submitters array.
+  const first = Array.isArray(res.submitters) ? res.submitters[0] : {};
+  return {
+    submission_id: res.id || first.submission_id,
+    submitter_id: first.id,
+    slug: first.slug || '',
+    embed_src: first.embed_src || '',
+    status: first.status || 'sent',
+    raw: res
+  };
+}
+
 // Fetch a submission (status, submitters, documents).
 async function getSubmission(submissionId) {
   return request('GET', `/submissions/${submissionId}`);
@@ -94,6 +122,7 @@ module.exports = {
   isConfigured,
   createHtmlTemplate,
   createSubmission,
+  createSubmissionFromHtml,
   getSubmission,
   getSubmissionDocuments,
   normalizeStatus,

@@ -33,7 +33,7 @@ function SendContractModal({ userId, employeeName, onClose, onSent, onError }) {
 
   useEffect(() => {
     axios.get('/api/admin/contract-templates').then(res => {
-      if (res.data.success) setTemplates(res.data.templates.filter(t => t.docuseal_template_id));
+      if (res.data.success) setTemplates(res.data.templates);
     }).catch(() => {});
   }, []);
 
@@ -88,7 +88,7 @@ function SendContractModal({ userId, employeeName, onClose, onSent, onError }) {
           <div>
             <label className="text-xs text-gray-400 mb-1 block">Template</label>
             <CustomSelect name="template" value={templateId} onChange={e => handlePickTemplate(e.target.value)} options={templateOptions} />
-            {templates.length === 0 && <p className="text-xs text-yellow-400 mt-1">No synced templates available. Create one under Admin → Contracts.</p>}
+            {templates.length === 0 && <p className="text-xs text-yellow-400 mt-1">No templates yet. Create one under Admin → Contracts.</p>}
           </div>
 
           {loadingPrefill && <div className="flex justify-center py-6"><div className="animate-spin h-6 w-6 border-b-2 border-indigo-600 rounded-full" /></div>}

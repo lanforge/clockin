@@ -3397,14 +3397,6 @@ function requireDocuseal(res) {
   return true;
 }
 
-// Create or recreate the DocuSeal template for a ContractTemplate document.
-async function syncDocusealTemplate(tplDoc) {
-  const html = contractTpl.bodyToDocusealHtml(tplDoc.body);
-  const created = await docuseal.createHtmlTemplate({ name: tplDoc.name, html });
-  tplDoc.docuseal_template_id = created.id;
-  return created;
-}
-
 // List templates
 app.get('/api/admin/contract-templates', requireAdmin, async (req, res) => {
   try {
@@ -3430,7 +3422,6 @@ app.post('/api/admin/contract-templates/detect', requireAdmin, (req, res) => {
 // Create template
 app.post('/api/admin/contract-templates', requireAdmin, async (req, res) => {
   try {
-    if (!requireDocuseal(res)) return;
     const { name, description, body, doc_type, send_email } = req.body;
     if (!name || !body) {
       return res.status(400).json({ success: false, error: 'Name and body are required' });
@@ -3445,7 +3436,6 @@ app.post('/api/admin/contract-templates', requireAdmin, async (req, res) => {
       fields: placeholders.map((p) => ({ name: p })),
       created_by: req.session.userId
     });
-    await syncDocusealTemplate(tpl);
     await tpl.save();
     res.json({ success: true, template: tpl });
   } catch (err) {
@@ -3470,11 +3460,6 @@ app.put('/api/admin/contract-templates/:id', requireAdmin, async (req, res) => {
     if (active !== undefined) tpl.active = !!active;
     tpl.fields = contractTpl.detectPlaceholders(tpl.body).map((p) => ({ name: p }));
     tpl.updated_at = new Date();
-
-    // Always republish to DocuSeal on save so the hosted template stays in sync
-    // with the current body and field set.
-    if (!requireDocuseal(res)) return;
-    await syncDocusealTemplate(tpl);
     await tpl.save();
     res.json({ success: true, template: tpl });
   } catch (err) {
@@ -3528,22 +3513,23 @@ app.post('/api/admin/user/:id/send-contract', requireAdmin, async (req, res) => 
     const { templateId, fields, email } = req.body;
     const tpl = await ContractTemplate.findById(templateId);
     if (!tpl) return res.status(404).json({ success: false, error: 'Template not found' });
-    if (!tpl.docuseal_template_id) return res.status(400).json({ success: false, error: 'Template is not synced with DocuSeal' });
 
-    // Build prefill dict { fieldName: value } from admin-confirmed field list.
-    const prefill = {};
+    // Build the value map { fieldName: value } from the admin-confirmed fields.
+    // Filled values are baked into the document as text; blanks stay as fields
+    // for the employee to complete. Only the signature/date remain fields.
+    const values = {};
     (fields || []).forEach((f) => {
-      if (f && f.name) prefill[f.name] = f.value == null ? '' : String(f.value);
+      if (f && f.name) values[f.name] = f.value == null ? '' : String(f.value);
     });
+    const html = contractTpl.bodyToSubmissionHtml(tpl.body, values);
 
     const submitterEmail = email || user.email;
-    const result = await docuseal.createSubmission({
-      templateId: tpl.docuseal_template_id,
+    const submitter = await docuseal.createSubmissionFromHtml({
+      name: tpl.name,
+      html,
       submitter: { email: submitterEmail, name: user.legal_name || user.username, role: 'First Party' },
-      prefill,
       sendEmail: tpl.send_email
     });
-    const submitter = Array.isArray(result) ? result[0] : result;
 
     // Snapshot values, redacting anything sensitive.
     const redacted = {};
@@ -3557,9 +3543,8 @@ app.post('/api/admin/user/:id/send-contract', requireAdmin, async (req, res) => 
       template_id: tpl._id,
       template_name: tpl.name,
       doc_type: tpl.doc_type,
-      docuseal_template_id: tpl.docuseal_template_id,
       docuseal_submission_id: submitter.submission_id,
-      docuseal_submitter_id: submitter.id,
+      docuseal_submitter_id: submitter.submitter_id,
       slug: submitter.slug || '',
       embed_src: submitter.embed_src || '',
       field_values: redacted,
